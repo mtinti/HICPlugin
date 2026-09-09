@@ -6,6 +6,10 @@ env:
   MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
   ACCEPT_EULA: "Y"
   MSSQL_PID: "developer"
+  # NuGet security-advisory warnings (NU1902-4) stay warnings instead of being escalated to errors
+  # by the RDMP projects' TreatWarningsAsErrors - the same suppression RDMP's own Directory.Build.props
+  # applies. MSBuild reads this env var as a property in every step, restore included.
+  WarningsNotAsErrors: "NU1902;NU1903;NU1904"
   
 jobs:
   package:
