@@ -44,12 +44,14 @@ public sealed class LoopbackDatabaseTests : DatabaseTests
     {
         // The base constructor supplies fresh catalogue/data-export repositories. Its full Startup
         // additionally requires Logging/DQE databases, which this SQL-only plugin never uses.
-        _server = new DiscoveredServer(new SqlConnectionStringBuilder
+        // SQL login when TestDatabases.txt names one (container CI), else Windows authentication (LocalDB CI).
+        var builder = new SqlConnectionStringBuilder
         {
-            DataSource = TestDatabaseSettings.ServerName, InitialCatalog = "master", UserID = TestDatabaseSettings.Username,
-            Password = TestDatabaseSettings.Password, IntegratedSecurity = string.IsNullOrWhiteSpace(TestDatabaseSettings.Username),
-            TrustServerCertificate = true
-        });
+            DataSource = TestDatabaseSettings.ServerName, InitialCatalog = "master", TrustServerCertificate = true
+        };
+        if (IntegratedSecurity) builder.IntegratedSecurity = true;
+        else { builder.UserID = TestDatabaseSettings.Username; builder.Password = TestDatabaseSettings.Password; }
+        _server = new DiscoveredServer(builder);
         _connection = _server.GetConnection(); _connection.Open();
         _dbA = "RDMP_LINKED_TEST_" + _suffix;
         _dbB = "RDMP_LINKED_TEST_it's_" + _suffix;
@@ -102,9 +104,15 @@ public sealed class LoopbackDatabaseTests : DatabaseTests
         Execute("EXEC master.dbo.sp_addlinkedserver @server=@name,@srvproduct=N'',@provider=N'MSOLEDBSQL',@datasrc=@source,@catalog=@catalog;",
             ("@name", name), ("@source", Environment.GetEnvironmentVariable("RDMP_LINKED_DATA_SOURCE") ?? "localhost"), ("@catalog", database));
         _createdLinks.Add(name);
-        Execute("EXEC master.dbo.sp_addlinkedsrvlogin @rmtsrvname=@name,@useself=N'False',@locallogin=NULL,@rmtuser=@user,@rmtpassword=@password;",
-            ("@name", name), ("@user", TestDatabaseSettings.Username), ("@password", TestDatabaseSettings.Password));
+        // With Windows authentication the link uses the caller's own login; with a SQL login, that login.
+        if (IntegratedSecurity)
+            Execute("EXEC master.dbo.sp_addlinkedsrvlogin @rmtsrvname=@name,@useself=N'True',@locallogin=NULL;", ("@name", name));
+        else
+            Execute("EXEC master.dbo.sp_addlinkedsrvlogin @rmtsrvname=@name,@useself=N'False',@locallogin=NULL,@rmtuser=@user,@rmtpassword=@password;",
+                ("@name", name), ("@user", TestDatabaseSettings.Username), ("@password", TestDatabaseSettings.Password));
     }
+
+    private static bool IntegratedSecurity => string.IsNullOrWhiteSpace(TestDatabaseSettings.Username);
 
     [OneTimeTearDown]
     public void RemoveFixture()
