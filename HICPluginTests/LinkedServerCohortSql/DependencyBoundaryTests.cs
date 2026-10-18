@@ -6,11 +6,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using NUnit.Framework;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 public sealed class DependencyBoundaryTests
 {

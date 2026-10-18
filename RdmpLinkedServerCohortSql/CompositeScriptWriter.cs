@@ -2,7 +2,7 @@
 // This file is part of the RDMP linked-server cohort SQL plugin.
 // Licensed under the GNU General Public License v3 or later, as RDMP itself. See <https://www.gnu.org/licenses/>.
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 /// <summary>The composite shape: one statement, for reading (plan 0.7.1).</summary>
 internal static class CompositeScriptWriter

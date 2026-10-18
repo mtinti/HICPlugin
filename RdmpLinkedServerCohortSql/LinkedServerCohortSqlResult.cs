@@ -4,7 +4,7 @@
 
 using Rdmp.Core.Curation.Data;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 public sealed record LinkedServerCohortSqlResult(string Sql, string HomeServerName, string HomeDatabaseName,
     IReadOnlyList<string> Warnings, IReadOnlyList<ITableInfo> TablesTouched)

@@ -6,7 +6,7 @@ using System.Text;
 using FAnsi.Discovery;
 using Rdmp.Core.Curation.Data;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 internal static class SqlParameterDependencies
 {

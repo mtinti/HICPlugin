@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using FAnsi;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
@@ -14,7 +15,7 @@ using Rdmp.Core.Curation.Data.Cohort.Joinables;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
 using Rdmp.Core.Repositories;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 internal sealed class CohortFixture
 {

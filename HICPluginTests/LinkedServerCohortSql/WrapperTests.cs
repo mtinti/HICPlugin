@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Rdmp.Core.Curation.Data;
@@ -15,7 +16,7 @@ using Rdmp.Core.QueryBuilding.Parameters;
 using Rdmp.Core.Repositories;
 using Tests.Common;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 public sealed class WrapperTests : UnitTests
 {

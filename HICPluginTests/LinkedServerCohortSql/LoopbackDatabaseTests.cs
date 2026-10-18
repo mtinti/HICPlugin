@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using System.Data.Common;
 using System.Data;
 using FAnsi.Discovery;
@@ -27,7 +28,7 @@ using Rdmp.Core.ReusableLibraryCode.DataAccess;
 using Tests.Common;
 using YamlDotNet.Serialization;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 [NonParallelizable]
 [Category("Database")]

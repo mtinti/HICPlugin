@@ -1,6 +1,6 @@
 # Linked-server cohort SQL
 
-Command: `ViewCohortLinkedServerSql` (project `Rdmp.LinkedServerCohortSql`).
+Command: `ViewCohortLinkedServerSql` (project `RdmpLinkedServerCohortSql`).
 
 Writes runnable T-SQL for a cohort identification configuration whose sets live on different SQL Servers
 that are reachable from the home server as linked servers. Core's "Query Builder SQL/Results (No Cache)"

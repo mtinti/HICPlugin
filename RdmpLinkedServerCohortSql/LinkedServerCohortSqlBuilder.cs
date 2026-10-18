@@ -14,7 +14,7 @@ using Rdmp.Core.QueryBuilding.Parameters;
 using Rdmp.Core.ReusableLibraryCode.Settings;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 internal sealed class LinkedServerCohortSqlBuilder
 {

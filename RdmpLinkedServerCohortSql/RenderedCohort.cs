@@ -7,7 +7,7 @@ using FAnsi.Discovery.QuerySyntax;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Cohort;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 /// <summary>Everything both writers need: placements with their home and remote SQL, the parameter declarations, the
 /// header inputs and the warnings (plan 0.7.6).</summary>
@@ -48,7 +48,7 @@ internal sealed class RenderedCohort(CohortIdentificationConfiguration cic, Coho
         var version = typeof(LinkedServerCohortSqlBuilder).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
         var header = new List<string>
         {
-            $"Linked-server cohort SQL for {Cic.Name} (Rdmp.LinkedServerCohortSql {version}). Shape: {(staged ? "staged" : "composite")}. " +
+            $"Linked-server cohort SQL for {Cic.Name} (RdmpLinkedServerCohortSql {version}). Shape: {(staged ? "staged" : "composite")}. " +
             $"Home server: {HomeServer}. Links used: {(links.Length == 0 ? "none" : string.Join(", ", links))}"
         };
         if (!staged) header.Add(ReadOnlyLine);

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using NUnit.Framework;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
@@ -13,7 +14,7 @@ using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.Repositories;
 using Tests.Common;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 /// <summary>Plan 0.7.7: the staged shape, in memory (executed cases are in <see cref="LoopbackDatabaseTests"/>).</summary>
 [NonParallelizable]

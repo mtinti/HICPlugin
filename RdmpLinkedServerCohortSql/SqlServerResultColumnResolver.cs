@@ -7,7 +7,7 @@ using FAnsi.Discovery.QuerySyntax;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 // Metadata-only description of the deliberately small expression grammar supported by WITH RESULT SETS.
 internal sealed class SqlServerResultColumnResolver(AggregateConfiguration aggregate)

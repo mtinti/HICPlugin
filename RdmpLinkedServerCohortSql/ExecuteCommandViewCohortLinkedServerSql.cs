@@ -8,7 +8,7 @@ using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.Repositories.Construction;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 /// <summary>
 /// Shows or saves the cohort's SQL for cohorts whose sets live on servers reachable as linked servers.

@@ -6,11 +6,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using Rdmp.Core.CommandExecution;
 using Rdmp.Core.Repositories;
 using Rdmp.Core.ReusableLibraryCode.Checks;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 internal sealed class RecordingActivator(IRDMPPlatformRepositoryServiceLocator locator, ICheckNotifier notifier = null)
     : ThrowImmediatelyActivator(locator, notifier)

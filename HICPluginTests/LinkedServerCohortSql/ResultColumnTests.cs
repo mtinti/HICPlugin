@@ -6,11 +6,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using NUnit.Framework;
 using Rdmp.Core.Repositories;
 using Tests.Common;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 public sealed class ResultColumnTests : UnitTests
 {

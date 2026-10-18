@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using RdmpLinkedServerCohortSql;
 using NUnit.Framework;
 using Rdmp.Core.CommandExecution;
 using Rdmp.Core.CommandLine.Interactive.Picking;
@@ -15,7 +16,7 @@ using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.Repositories;
 using Tests.Common;
 
-namespace Rdmp.LinkedServerCohortSql.Tests;
+namespace HICPluginTests;
 
 public sealed class CommandTests : UnitTests
 {

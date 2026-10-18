@@ -4,7 +4,7 @@
 
 using System.Text;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 /// <summary>
 /// The staged shape, the one to execute (plan 0.7.2): far-side sets and patient index tables are copied into temp tables

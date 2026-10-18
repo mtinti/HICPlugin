@@ -8,7 +8,7 @@ using Rdmp.Core.CommandExecution.AtomicCommands;
 using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.DataExport.Data;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 public sealed class LinkedServerCohortSqlUserInterface(IBasicActivateItems activator) : PluginUserInterface(activator)
 {

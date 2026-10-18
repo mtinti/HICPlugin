@@ -4,7 +4,7 @@
 
 using Rdmp.Core.Curation.Data.Aggregation;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 internal static class CollationClause
 {

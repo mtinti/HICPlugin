@@ -6,7 +6,7 @@ using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Aggregation;
 using Rdmp.Core.Curation.Data.Cohort.Joinables;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 internal sealed class SetPlacement(AggregateConfiguration set, ITableInfo[] setTables,
     JoinableCohortAggregateConfigurationUse join, AggregateConfiguration pit, ITableInfo[] pitTables,

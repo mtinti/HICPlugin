@@ -5,7 +5,7 @@
 using System.Text.RegularExpressions;
 using Rdmp.Core.Curation.Data.Aggregation;
 
-namespace Rdmp.LinkedServerCohortSql;
+namespace RdmpLinkedServerCohortSql;
 
 /// <summary>One column of the select list core writes for a cohort set. <see cref="Dimension"/> is null for the CountSQL column;
 /// <see cref="Name"/> is null when the column has no name that SQL Server would give it.</summary>
