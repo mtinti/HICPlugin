@@ -27,6 +27,7 @@
     <ProjectReference Include="..\HICPluginInteractive\HICPluginInteractive.csproj" />
     <ProjectReference Include="..\HICPlugin\HICPlugin.csproj" />
     <ProjectReference Include="..\RdmpCohortBuildBreakdownByGroups\RdmpCohortBuildBreakdownByGroups.csproj" />
+    <ProjectReference Include="..\Rdmp.LinkedServerCohortSql\Rdmp.LinkedServerCohortSql.csproj" />
     <ProjectReference Include="..\SCIStorePlugin\SCIStorePlugin.csproj" />
   </ItemGroup>
   <ItemGroup>
@@ -38,6 +39,7 @@
       <SubType>Designer</SubType>
     </Content>
     <Content Include="TestData\report-with-multiple-descriptions.xml" />
+    <None Include="LinkedServerCohortSql\Fixtures\recruitment-shape.*" Link="Fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <Service Include="{82A7F48D-3B50-4B1E-B82E-3ADA8210C358}" />

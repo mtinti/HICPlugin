@@ -1,0 +1,57 @@
+# Declarative data fixture consumed by the plugin's LoopbackDatabaseTests, not an rdmp command script.
+# Database indices select four home databases and three databases behind one loopback link.
+Rows: 30
+GlobalMinimum: 3
+UpperLimit: 29
+StatusExcluded: [3, 7]
+RegistrationExcluded: [4, 8]
+PitExcluded: [5, 9]
+Sets:
+  - Name: minimum
+    Database: 0
+    Inclusion: true
+    Where: 'id>=@minimum'
+    Parameter: {Name: '@minimum', Type: int, Value: '1'}
+  - Name: maximum
+    Database: 1
+    Inclusion: true
+    Where: 'id<=@maximum'
+    Parameter: {Name: '@maximum', Type: int, Value: 'dbo.UpperLimit()'}
+  - Name: status
+    Database: 2
+    Inclusion: true
+    Where: 'status=@code'
+    Parameter: {Name: '@code', Type: 'varchar(5)', Value: "'ready'"}
+  - Name: registration
+    Database: 3
+    Inclusion: true
+    Where: 'registration=@code'
+    Parameter: {Name: '@code', Type: 'varchar(20)', Value: "'registered'"}
+  - Name: contact_count
+    Database: 0
+    Inclusion: true
+    UsesPit: true
+    Where: '{pit}.n>cutoff'
+  - Name: local_exclusion_one
+    Database: 1
+    Where: 'id=6'
+  - Name: local_exclusion_two
+    Database: 3
+    Where: 'id=10'
+  - Name: remote_exclusion_one
+    Remote: true
+    Database: 0
+    Where: 'id=11'
+  - Name: remote_exclusion_two
+    Remote: true
+    Database: 1
+    Where: 'id=12'
+  - Name: remote_exclusion_three
+    Remote: true
+    Database: 2
+    Where: 'id=13'
+  - Name: remote_exclusion_four
+    Remote: true
+    Database: 2
+    Where: "id=14 AND @code='far'"
+    Parameter: {Name: '@code', Type: 'varchar(3)', Value: "'far'"}

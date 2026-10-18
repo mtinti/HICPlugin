@@ -48,6 +48,8 @@ Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "InterfaceToJira", "Interfac
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RdmpCohortBuildBreakdownByGroups", "RdmpCohortBuildBreakdownByGroups\RdmpCohortBuildBreakdownByGroups.csproj", "{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Rdmp.LinkedServerCohortSql", "Rdmp.LinkedServerCohortSql\Rdmp.LinkedServerCohortSql.csproj", "{5D5D9D94-3F85-43A4-AC9D-9F5C3F37F283}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -164,6 +166,10 @@ Global
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D5D9D94-3F85-43A4-AC9D-9F5C3F37F283}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D5D9D94-3F85-43A4-AC9D-9F5C3F37F283}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D5D9D94-3F85-43A4-AC9D-9F5C3F37F283}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D5D9D94-3F85-43A4-AC9D-9F5C3F37F283}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
