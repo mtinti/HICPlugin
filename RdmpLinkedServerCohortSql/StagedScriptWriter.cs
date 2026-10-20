@@ -8,7 +8,7 @@ namespace RdmpLinkedServerCohortSql;
 
 /// <summary>
 /// Writes the staged script, the one to run. First it copies each set and patient index table that lives on a linked server
-/// into a temp table, so each linked server is busy for seconds only. Next it runs each set on the home server as its own
+/// into a temp table, so the linked servers are only used for those copies. Next it runs each set on the home server as its own
 /// statement into a temp table. Last it combines the temp tables with UNION, INTERSECT and EXCEPT, as the cohort tree says.
 /// RDMP's cached build also runs each set on its own.
 /// </summary>

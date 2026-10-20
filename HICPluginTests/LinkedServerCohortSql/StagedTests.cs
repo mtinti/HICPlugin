@@ -236,10 +236,10 @@ public sealed class StagedTests : UnitTests
         if (!accepted)
         {
             var message = Refused(LinkedServerRenderReason.StagedCollationUnknown).Message;
-            Assert.That(message, Does.Contain($"The staged script cannot copy column {expression} into a temp table"));
             Assert.That(message, SqlServerResultColumnResolver.HasInnerCollate(expression)
-                ? Does.Contain("another COLLATE at the end does not help").And.Contain("compare the set's result before and after")
-                : Does.Contain("Add COLLATE <collation name> at the end of the column's SQL").And.Contain("that script is for inspection only"));
+                ? Does.Contain($"Column {expression} has a COLLATE inside the expression").And.Contain("Adding another COLLATE at the end does not help.")
+                : Does.Contain($"The plugin cannot verify that column {expression} compares the same way after it is copied into a temp table.")
+                    .And.Contain("Add COLLATE <collation name> at the end of the column's SQL").And.Contain("that script is for inspection only"));
             return;
         }
         var collation = CoreSelectList.TrailingCollation(expression, out _);
@@ -297,7 +297,7 @@ public sealed class StagedTests : UnitTests
         set.ClearAllInjections();
         Refused(LinkedServerRenderReason.StagedCollationUnknown);
         marker.SelectSQL += " COLLATE Latin1_General_CI_AS"; marker.SaveToDatabase(); set.ClearAllInjections();
-        Assert.That(Refused(LinkedServerRenderReason.StagedCollationUnknown).Message, Does.Contain("another COLLATE at the end does not help"));
+        Assert.That(Refused(LinkedServerRenderReason.StagedCollationUnknown).Message, Does.Contain("Adding another COLLATE at the end does not help."));
     }
 
     [Test]

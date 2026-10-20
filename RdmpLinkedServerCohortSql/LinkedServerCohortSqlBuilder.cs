@@ -163,14 +163,13 @@ internal sealed class LinkedServerCohortSqlBuilder
                 {
                     var problem = resolver.HomeCollationProblem(column);
                     if (problem == null) continue;
-                    var copy = $"The staged script cannot copy column {column.Expression} into a temp table without changing how its text compares.";
                     if (SqlServerResultColumnResolver.HasInnerCollate(column.Expression))
                         throw Error(LinkedServerRenderReason.StagedCollationUnknown, placement.Set,
-                            $"{copy} The expression uses COLLATE inside it, for example MIN(col COLLATE ...). A temp table cannot keep the effect " +
-                            "of that COLLATE, and another COLLATE at the end does not help.",
-                            "Moving the COLLATE to the end can change the result, so compare the set's result before and after any change, " +
-                            "or use RDMP's cached build for this cohort.");
-                    throw Error(LinkedServerRenderReason.StagedCollationUnknown, placement.Set, $"{copy} {problem}",
+                            $"Column {column.Expression} has a COLLATE inside the expression, and a temp table does not keep its effect. " +
+                            "Adding another COLLATE at the end does not help.",
+                            "Use RDMP's cached build for this cohort. The plugin's documentation explains the options.");
+                    throw Error(LinkedServerRenderReason.StagedCollationUnknown, placement.Set,
+                        $"The plugin cannot verify that column {column.Expression} compares the same way after it is copied into a temp table. {problem}",
                         "Add COLLATE <collation name> at the end of the column's SQL, using the collation of the columns it is compared with. " +
                         InspectionHint);
                 }

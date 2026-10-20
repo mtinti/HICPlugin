@@ -51,7 +51,7 @@ public sealed class BuilderTests : UnitTests
         Assert.That(result.Sql[(result.Sql.IndexOf(Environment.NewLine, StringComparison.Ordinal) + Environment.NewLine.Length)..].Replace("\t", ""),
             Is.EqualTo(rdmpSql.Replace("\t", "")));
         Assert.That(result.Sql, Does.Contain("@p_2"));
-        Assert.That(result.ToScript(), Does.Contain("It reads from no linked server.").And.Not.Contain("OPENQUERY"));
+        Assert.That(result.ToScript(), Does.Contain("All sets run on the home server.").And.Not.Contain("OPENQUERY"));
     }
 
     [Test]

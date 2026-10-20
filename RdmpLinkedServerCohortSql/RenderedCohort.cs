@@ -57,7 +57,7 @@ internal sealed class RenderedCohort(CohortIdentificationConfiguration cic, Coho
                 ? "Script type: staged, to run. Each set goes into its own temp table, and the script combines the tables at the end."
                 : "Script type: for inspection only.",
             $"The script runs on server {HomeServer}, the home server. " +
-            (links.Length == 0 ? "It reads from no linked server." : $"It reads from these linked servers: {string.Join(", ", links)}.")
+            (links.Length == 0 ? "All sets run on the home server." : $"It reads from these linked servers: {string.Join(", ", links)}.")
         };
         if (!staged) header.Add(InspectionLine);
         var databases = new[] { HomeDatabase }.Concat(Touched.Where(t => comparer.Equals(t.Server.Trim(), HomeServer))
@@ -67,7 +67,7 @@ internal sealed class RenderedCohort(CohortIdentificationConfiguration cic, Coho
             "so tables in the other databases need their database name (database.schema.table).");
         foreach (var link in links)
             header.Add($"Each OPENQUERY block runs on {link} under the login that the linked server {link} on {HomeServer} maps your login to " +
-                       "(see sys.linked_logins). That can be a shared login, not you.");
+                       "(see sys.linked_logins). The linked server may use a shared login.");
         if (links.Length > 0)
         {
             header.Add($"If the run fails with error 7202 (linked server not found), check that these names match a linked server on {HomeServer}: " +

@@ -35,7 +35,7 @@ public enum LinkedServerRenderReason
     ReservedParameterName,
     /// <summary>RDMP does not record the database of a table on the home server.</summary>
     HomeDatabaseUnknown,
-    /// <summary>The staged script cannot copy a column into a temp table without changing how its text compares.</summary>
+    /// <summary>The plugin cannot verify that a text column compares the same way after the staged script copies it into a temp table.</summary>
     StagedCollationUnknown,
     /// <summary>The staged script needs the exact column order of a set, and RDMP's order is not certain.</summary>
     StagedColumnOrderAmbiguous,

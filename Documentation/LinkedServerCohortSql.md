@@ -24,14 +24,14 @@ credential and runs nothing. Whoever runs the script does so in their own SQL to
 ## Two scripts
 
 - **Staged, to run.** The script first copies each set and patient index table that lives on a linked server
-  into a temp table, so each linked server is busy for seconds only. Next it runs each set on the home server
+  into a temp table, so the linked servers are only used for those copies. Next it runs each set on the home server
   as its own statement into a temp table, as RDMP's cached build does. Last it combines the temp tables with
   UNION, INTERSECT and EXCEPT, as the cohort tree says. It returns a count table (one row per set, in the
   order the cohort tree combines them, with the set's ID and temp table, then a "Final cohort" row), and then
   the cohort, which it also keeps in `#rdmp_cohort`.
 - **For inspection only.** One statement: RDMP's own no-cache SQL with the remote parts in `OPENQUERY`. SQL
-  Server plans it as one query, so a cohort with heavy sets can run for hours where the cached build takes
-  minutes. The header says not to run it on production. (In the code it is called the composite.)
+  Server plans it as one query, which can be very slow for a cohort with heavy sets. The header says not to
+  run it on production. (In the code it is called the composite.)
 
 The staged script names its temp tables as follows: `#rdmp_s<set ID>` holds a set from the home server,
 `#rdmp_r<set ID>` a set copied from a linked server, `#rdmp_pit<patient index ID>` a patient index table copied
@@ -53,7 +53,7 @@ default database, after checking that it is the right one, and stops with an err
 reason brings back the USE form.
 
 Each `OPENQUERY` block runs on the linked server under the login that the linked server maps the caller's
-login to (`sys.linked_logins`). That can be a shared login. The header names each linked server.
+login to (`sys.linked_logins`). The linked server may use a shared login. The header names each linked server.
 
 ## Menu and command line
 
