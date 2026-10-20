@@ -11,15 +11,17 @@ using Rdmp.Core.Repositories.Construction;
 namespace RdmpLinkedServerCohortSql;
 
 /// <summary>
-/// Shows or saves the cohort's SQL for cohorts whose sets live on servers reachable as linked servers.
-/// <para>Staged (<c>staged = true</c>): one temp table per set, the shape to run. Composite (default): one statement, for reading.</para>
-/// <para>CLI: <c>rdmp ViewCohortLinkedServerSql CohortIdentificationConfiguration:&lt;id&gt; out.sql true</c> writes the staged
-/// script to a file; <c>... &lt;id&gt; null true</c> writes it to stdout; <c>... &lt;id&gt; [out.sql]</c> writes the composite.</para>
+/// Shows or saves the SQL of a cohort whose sets live on servers that the home server reaches as linked servers.
+/// <para>With <c>staged = true</c> it writes the staged script, which copies each set into a temp table; this is the script to
+/// run. By default it writes the script for inspection only, which is one statement.</para>
+/// <para>Command line: <c>rdmp cmd ViewCohortLinkedServerSql CohortIdentificationConfiguration:&lt;id&gt; out.sql true</c> saves the
+/// staged script to a file, <c>... &lt;id&gt; null true</c> prints it, and <c>... &lt;id&gt; out.sql</c> saves the script for
+/// inspection.</para>
 /// </summary>
 public sealed class ExecuteCommandViewCohortLinkedServerSql : BasicCommandExecution
 {
-    internal const string Composite = "Query Builder SQL (Linked Servers)";
-    internal const string Staged = "Query Builder SQL (Linked Servers, staged)";
+    internal const string Composite = "Query Builder SQL (Linked Servers, for inspection only)";
+    internal const string Staged = "Query Builder SQL (Linked Servers, staged, to run)";
     internal const string SaveSuffix = " save to file...";
 
     private readonly CohortIdentificationConfiguration _cic;
@@ -35,11 +37,14 @@ public sealed class ExecuteCommandViewCohortLinkedServerSql : BasicCommandExecut
         _toFile = toFile;
         _staged = staged;
         OverrideCommandName = staged ? Staged : Composite;
-        if (cic == null) SetImpossible("No cohort identification configuration");
-        else if (cic.RootCohortAggregateContainer_ID == null) SetImpossible("Cohort has no root container");
-        // "<id> true" binds true to the file argument and would write the composite to a file named true (plan 0.7.5).
+        if (cic == null) SetImpossible("This command needs a cohort identification configuration, and none was given.");
+        else if (cic.RootCohortAggregateContainer_ID == null)
+            SetImpossible("The cohort has no sets yet (it has no top-level UNION, INTERSECT or EXCEPT container). Add a set first.");
+        // The arguments are positional, so "<id> true" puts true in the file argument and would save the script for inspection
+        // to a file named true.
         if (toFile != null && (toFile.Name.Equals("true", StringComparison.OrdinalIgnoreCase) || toFile.Name.Equals("false", StringComparison.OrdinalIgnoreCase)))
-            SetImpossible($"The file argument is '{toFile.Name}'; did you mean '<id> null {toFile.Name.ToLowerInvariant()}' (staged to the console) or '<id> out.sql {toFile.Name.ToLowerInvariant()}'?");
+            SetImpossible($"The file argument is '{toFile.Name}', so the script for inspection would be saved to a file named '{toFile.Name}'. " +
+                          "To print the staged script, use '<id> null true'. To save it, use '<id> out.sql true'.");
     }
 
     public ExecuteCommandViewCohortLinkedServerSql(IBasicActivateItems activator,
@@ -54,17 +59,18 @@ public sealed class ExecuteCommandViewCohortLinkedServerSql : BasicCommandExecut
         : this(activator, association?.CohortIdentificationConfiguration, askForFile, staged)
     {
         if (association?.CohortIdentificationConfiguration == null)
-            SetImpossible("Association has no cohort identification configuration");
+            SetImpossible("This project points to a cohort that no longer exists. Someone may have deleted it.");
     }
 
-    // WideMessageBox.MAX_LENGTH_BODY at RDMP 9.3.0. Avoid a dependency on the Windows-only UI assembly.
+    // RDMP 9.3.0 shows at most 20,000 characters in a message box (WideMessageBox.MAX_LENGTH_BODY). The value is copied here
+    // so the plugin does not depend on the Windows-only user interface assembly.
     internal static bool NeedsFile(bool isInteractive, int length) => isInteractive && length > 20000;
 
     public override void Execute()
     {
         base.Execute();
         var result = new LinkedServerCohortSqlBuilder().Build(_cic, _staged);
-        // The tip tells a console user to pass a file path; pointless inside the file they asked for.
+        // The tip tells a console user how to save the script to a file, so it is left out when the script goes to a file.
         var text = result.ToScript(includeConsoleTip: !BasicActivator.IsInteractive && _toFile == null);
         if (_toFile != null)
         {
@@ -80,12 +86,13 @@ public sealed class ExecuteCommandViewCohortLinkedServerSql : BasicCommandExecut
                     $"The SQL is {text.Length} characters, too long for this window. Saved to {saved.FullName}.");
             else
                 BasicActivator.Show("Linked Servers SQL",
-                    $"The SQL is {text.Length} characters, too long for this window. " +
-                    $"Use '{(_staged ? Staged : Composite) + SaveSuffix}'. " +
-                    "In the terminal GUI, create an empty .sql first and pick it, or use the CLI file argument.");
+                    $"The SQL is {text.Length} characters, too long for this window, and no file was saved. " +
+                    $"Use \"{(_staged ? Staged : Composite) + SaveSuffix}\" to save it. The terminal interface can only pick a file that " +
+                    "already exists, so create an empty .sql file first and pick it, or give a file path on the rdmp command line.");
             return;
         }
-        BasicActivator.Show($"-- {LinkedServerCohortSqlResult.CommentText(_cic.Name)} (Linked Servers{(_staged ? ", staged" : "")}) SQL", text);
+        // The title starts with "--" because RDMP copies it above the script, where it must be an SQL comment.
+        BasicActivator.Show($"-- {LinkedServerCohortSqlResult.CommentText(_cic.Name)} (Linked Servers, {(_staged ? "staged, to run" : "for inspection only")}) SQL", text);
     }
 
     private FileInfo Save(string text)

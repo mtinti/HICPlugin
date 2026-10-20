@@ -20,6 +20,7 @@ using Tests.Common;
 
 namespace HICPluginTests;
 
+/// <summary>Tests of how the plugin decides where each set runs, and what it reads from RDMP's catalogue.</summary>
 [NonParallelizable]
 public sealed class RoutingAndMetadataTests : UnitTests
 {
@@ -28,10 +29,10 @@ public sealed class RoutingAndMetadataTests : UnitTests
     protected override void SetUp() { Repository = new MemoryDataExportRepository(); _f = new CohortFixture(Repository); }
 
     [Test]
-    public void ApiSetWithNoTablesRefusesBeforeCoreRendering()
+    public void BuilderRefusesAnApiSetBeforeRdmpWritesAnySql()
     {
         var catalogue = new Catalogue(Repository, "API:Example");
-        // Use the released host's prefix rather than assuming API implementations are installed.
+        // Use RDMP's own API prefix, so the test does not need an API plugin installed.
         var prefix = Rdmp.Core.CohortCreation.Execution.PluginCohortCompiler.ApiPrefix;
         catalogue.Name = prefix + "Example"; catalogue.SaveToDatabase();
         var set = new AggregateConfiguration(Repository, catalogue, "Api"); _f.Root.AddChild(set, 1);
@@ -39,7 +40,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void DisabledContainerDoesNotChooseHomeOrExposeItsApiSet()
+    public void ADisabledContainerDoesNotChooseTheHomeServer()
     {
         var ignored = _f.Set("A", "ignored"); var home = _f.Set("B", "home");
         var sub = new CohortAggregateContainer(Repository, SetOperation.UNION) { IsDisabled = true };
@@ -49,7 +50,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [TestCase(false)] [TestCase(true)]
-    public void EmptyChildObeysStrictSetting(bool strict)
+    public void AnEmptyContainerIsRefusedOnlyWhenStrictValidationIsOn(bool strict)
     {
         _f.Set("A"); _f.Root.AddChild(new CohortAggregateContainer(Repository, SetOperation.UNION));
         var previous = UserSettings.StrictValidationForCohortBuilderContainers;
@@ -62,7 +63,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void MixedServersWithinSetRefuses()
+    public void BuilderRefusesASetWhoseTablesAreOnTwoServers()
     {
         var a = _f.Set("A");
         var other = new TableInfo(Repository, "[HomeDb].dbo.Other") { Server = "other", Database = "HomeDb", DatabaseType = DatabaseType.MicrosoftSQLServer };
@@ -71,7 +72,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void LowestTableIdChoosesHomeDatabaseAndHeaderListsOtherHomeDatabases()
+    public void TheTableWithTheLowestIdChoosesTheHomeDatabaseAndTheHeaderListsTheOthers()
     {
         var set = _f.Set("A", database: "First");
         var other = new TableInfo(Repository, "[Other].dbo.Second")
@@ -83,25 +84,30 @@ public sealed class RoutingAndMetadataTests : UnitTests
         var result = _f.Build();
         Assert.That(result.HomeDatabaseName, Is.EqualTo("First"));
         Assert.That(result.Sql, Does.StartWith("USE [First];"));
-        Assert.That(result.ToScript(), Does.Contain("Home databases: First, Other; USE names First"));
+        Assert.That(result.ToScript(), Does.Contain("Sets on the home server use databases First, Other. The script starts with USE First"));
     }
 
     [Test]
-    public void RemoteSetAndSameServerPitInDifferentDatabasesRefuse()
+    public void BuilderRefusesARemoteSetAndItsPatientIndexTableInTwoDatabases()
     {
         _f.Set("A"); var r = _f.Set("R", "remote", "One"); var pit = _f.Set("Pit", "remote", "Two", addToRoot: false);
-        _f.Join(r, pit); AssertReason(LinkedServerRenderReason.MultipleRemoteDatabases);
+        _f.Join(r, pit);
+        Assert.That(AssertReason(LinkedServerRenderReason.MultipleRemoteDatabases).Message,
+            Does.Contain("This is a limit of the plugin, not of SQL Server."));
     }
 
     [Test]
-    public void MissingRemoteDatabaseHasTypedError()
+    public void BuilderRefusesARemoteTableWithNoDatabaseUntilItHasOne()
     {
         _f.Set("A"); var r = _f.Set("R", "remote"); CohortFixture.Table(r).Database = null;
-        AssertReason(LinkedServerRenderReason.MultipleRemoteDatabases);
+        Assert.That(AssertReason(LinkedServerRenderReason.RemoteDatabaseUnknown).Message,
+            Does.Contain("Synchronise the table in RDMP so its database is recorded."));
+        CohortFixture.Table(r).Database = "[HomeDb]";
+        Assert.That(_f.Build().Sql, Does.Contain("OPENQUERY"));
     }
 
     [Test]
-    public void MultipleAndNestedPatientIndexesRefuseMalformedCatalogue()
+    public void BuilderRefusesASetWithTwoPatientIndexTablesAndANestedPatientIndexTable()
     {
         var home = _f.Set("A"); var p = _f.Set("P", "remote", addToRoot: false); var q = _f.Set("Q", "remote", addToRoot: false);
         var first = _f.Join(home, p);
@@ -116,7 +122,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [TestCase(false)] [TestCase(true)]
-    public void UnaliasedRemoteIdentifierRefuses(bool patientIndex)
+    public void BuilderRefusesARemoteIdentifierExpressionWithoutAnAlias(bool patientIndex)
     {
         var home = _f.Set("A"); var r = _f.Set("R", "remote", addToRoot: !patientIndex);
         if (patientIndex) _f.Join(home, r);
@@ -126,28 +132,32 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void UnaliasedCountRefusesWhenCollationProjectionNeedsItsName()
+    public void APatientIndexCountNeedsAnAliasWhenTheScriptAddsCollateToTheIdentifier()
     {
         var home = _f.Set("A", idType: "varchar(10)", collation: "Latin1_General_CI_AS");
         var pit = _f.Set("P", "remote", idType: "varchar(10)", collation: "Latin1_General_CS_AS", addToRoot: false);
         pit.CountSQL = "COUNT(*)"; pit.SaveToDatabase(); _f.Join(home, pit);
-        AssertReason(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias);
+        Assert.That(AssertReason(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias).Message,
+            Does.StartWith($"Cannot write linked-server SQL for patient index table {pit}. Its count column has no alias."));
+        // The remedy works: with an alias, the cohort builds.
+        pit.CountSQL = "COUNT(*) AS n"; pit.SaveToDatabase();
+        Assert.That(_f.Build().Sql, Does.Contain("[id] COLLATE Latin1_General_CI_AS AS [id], [n]"));
     }
 
     [Test]
-    public void GlobalsOverrideRemoteLocalsAndCycleWarningsReachHeader()
+    public void CohortParametersOverrideSetParametersAndAParameterLoopIsWarnedInTheHeader()
     {
         _f.Set("A"); var r = _f.Set("R", "remote");
         _f.Parameter(r, "@p", "1"); _f.Parameter(_f.Cic, "@p", "9"); _f.Filter(r, "id=@p");
         Assert.That(WrapperTests.DecodeArgument(_f.Build().Sql), Does.Contain("SET @p=9;").And.Not.Contain("SET @p=1;"));
         _f.Parameter(r, "@a", "@b"); _f.Parameter(r, "@b", "@a"); _f.Filter(r, "id=@a");
         var result = _f.Build(); Assert.That(result.Warnings, Has.Count.EqualTo(1));
-        Assert.That(result.ToScript(), Does.Contain("-- WARNING: Set"));
+        Assert.That(result.ToScript(), Does.Contain($"-- WARNING: Set {r}: Parameters @a, @b refer to each other in a loop."));
     }
 
     [TestCase("unknown", null)] [TestCase(null, null)] [TestCase("int", null)]
     [TestCase("varchar(10)", "Latin1_General_CS_AS")]
-    public void CollationIsOnlyAddedWhenBothPlainCharacterTypesAreKnown(string type, string expected)
+    public void CollateIsAddedOnlyWhenBothIdentifiersAreTextWithKnownDifferentCollations(string type, string expected)
     {
         var a = _f.Set("A", idType: "varchar(10)", collation: "Latin1_General_CS_AS");
         var b = _f.Set("B", "remote", idType: type, collation: "Latin1_General_CI_AS");
@@ -156,7 +166,7 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void DuplicateColumnMetadataCollapsesButConflictingTypeRefuses()
+    public void IdenticalDuplicateColumnsCountAsOneButDifferentTypesCannotBeDescribed()
     {
         var pit = _f.Set("T", "remote", "Db", addToRoot: false); var table = CohortFixture.Table(pit);
         var duplicate = new ColumnInfo(Repository, "[Db]..[T].[id]", "int", table);
@@ -168,12 +178,19 @@ public sealed class RoutingAndMetadataTests : UnitTests
     }
 
     [Test]
-    public void ExplicitCollationMakesNumericToCharacterCastDescribable()
+    public void ACollateAfterANumberCastToTextGivesTheColumnACollation()
     {
         var pit = _f.Set("T", "remote", addToRoot: false);
         pit.CountSQL = "CAST(MIN(id) AS varchar(10)) COLLATE Latin1_General_CS_AS AS n";
         Assert.That(new SqlServerResultColumnResolver(pit).Resolve().Last(), Is.EqualTo(new ResultColumn("n", "varchar(10)", "Latin1_General_CS_AS")));
     }
 
-    private void AssertReason(LinkedServerRenderReason reason) => Assert.That(Assert.Throws<LinkedServerRenderException>(() => _f.Build())!.Reason, Is.EqualTo(reason));
+    /// <summary>Checks the reason, and that the message names its subject once and does not show the reason code.</summary>
+    private LinkedServerRenderException AssertReason(LinkedServerRenderReason reason)
+    {
+        var ex = Assert.Throws<LinkedServerRenderException>(() => _f.Build());
+        Assert.That(ex!.Reason, Is.EqualTo(reason), ex.Message);
+        Assert.That(ex.Message, Does.StartWith("Cannot write linked-server SQL for ").And.Not.Contain(reason.ToString()));
+        return ex;
+    }
 }

@@ -9,16 +9,21 @@ namespace RdmpLinkedServerCohortSql;
 public sealed record LinkedServerCohortSqlResult(string Sql, string HomeServerName, string HomeDatabaseName,
     IReadOnlyList<string> Warnings, IReadOnlyList<ITableInfo> TablesTouched)
 {
-    internal const string ConsoleTip = "-- Tip: pass a file path as the argument after the configuration for clean output; stdout also carries log lines";
     internal IReadOnlyList<string> HeaderLines { get; init; } = Array.Empty<string>();
 
-    /// <summary>Composite: one statement, for reading. Staged: one temp table per set, the shape to execute (plan 0.7).</summary>
+    /// <summary>Which script this is: the staged script, which copies each set into a temp table and is the one to run, or the
+    /// script for inspection only (the composite), which is one statement.</summary>
     public CohortSqlShape Shape { get; init; } = CohortSqlShape.Composite;
 
+    /// <summary>The first line printed on the console. Its example keeps the script type the user asked for.</summary>
+    internal static string ConsoleTip(CohortSqlShape shape) =>
+        "-- Tip: RDMP also prints log lines to the console. To get only the SQL, save it to a file: " +
+        "rdmp cmd ViewCohortLinkedServerSql CohortIdentificationConfiguration:<id> out.sql" + (shape == CohortSqlShape.Staged ? " true" : "");
+
     public string ToScript(bool includeConsoleTip = false) =>
-        (includeConsoleTip ? ConsoleTip + Environment.NewLine : "") +
+        (includeConsoleTip ? ConsoleTip(Shape) + Environment.NewLine : "") +
         string.Concat(HeaderLines.Select(line => line + Environment.NewLine)) + Sql;
 
-    // Catalogue names and exception details must never escape their SQL comment line.
+    // A name from the catalogue must stay inside its comment line, so line breaks become spaces.
     internal static string CommentText(string value) => (value ?? "").Replace('\r', ' ').Replace('\n', ' ');
 }

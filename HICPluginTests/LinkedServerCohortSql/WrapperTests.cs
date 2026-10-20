@@ -18,6 +18,10 @@ using Tests.Common;
 
 namespace HICPluginTests;
 
+/// <summary>
+/// Tests of the OPENQUERY wrapper on its own. The checked form runs in the link login's default database after checking it;
+/// the USE form runs <c>EXEC('USE [db]; ...') WITH RESULT SETS (...)</c>.
+/// </summary>
 public sealed class WrapperTests : UnitTests
 {
     private CohortFixture _f;
@@ -42,7 +46,7 @@ public sealed class WrapperTests : UnitTests
         _table, form, new[] { new ResultColumn("id", "int") });
 
     [Test]
-    public void NamesAndApostrophesSurviveBothForms()
+    public void ServerNamesAndApostrophesSurviveBothForms()
     {
         const string sql = "SELECT 1 AS id /* O'Neil $1 $& */";
         var guarded = Wrap(sql).Sql;
@@ -54,7 +58,7 @@ public sealed class WrapperTests : UnitTests
 
     [TestCase(false, RemoteBatchForm.Guarded)] [TestCase(true, RemoteBatchForm.Guarded)]
     [TestCase(false, RemoteBatchForm.UseDatabase)] [TestCase(true, RemoteBatchForm.UseDatabase)]
-    public void LimitCountsDecodedArgumentIncludingInnerEscapes(bool unicode, RemoteBatchForm form)
+    public void LengthLimitCountsTheQueryTextAfterDoubledQuotesAreReadAsOne(bool unicode, RemoteBatchForm form)
     {
         var seed = "SELECT 1 AS id /*" + new string('\'', 200) + (unicode ? "é" : "") + "*/";
         var limit = unicode ? 4000 : 8000;
@@ -63,12 +67,13 @@ public sealed class WrapperTests : UnitTests
         var sql = Wrap(atLimit, form).Sql;
         Assert.That(DecodeArgument(sql).Length, Is.EqualTo(limit));
         Assert.That(sql, Does.Contain(unicode ? ", N'" : ", '"));
-        Assert.That(Assert.Throws<LinkedServerRenderException>(() => Wrap(atLimit + " ", form))!.Reason,
-            Is.EqualTo(LinkedServerRenderReason.BatchTooLong));
+        var tooLong = Assert.Throws<LinkedServerRenderException>(() => Wrap(atLimit + " ", form));
+        Assert.That(tooLong!.Reason, Is.EqualTo(LinkedServerRenderReason.BatchTooLong));
+        Assert.That(tooLong.Message, Does.Contain($"is {limit + 1} characters long, but OPENQUERY accepts at most {limit}"));
     }
 
     [Test]
-    public void ParametersArePrunedClosedAndSorted()
+    public void RemoteQueryDeclaresOnlyTheParametersItUsesAfterTheParametersTheyUse()
     {
         var end = _f.Parameter(_f.Cic, "@end", "@middle + 1");
         var middle = _f.Parameter(_f.Cic, "@middle", "@start + 1");
@@ -81,7 +86,7 @@ public sealed class WrapperTests : UnitTests
     }
 
     [Test]
-    public void CommentsLiteralsAndTableSelfReferencesDoNotCreateCycles()
+    public void NamesInCommentsAndStringsAndATableThatNamesItselfDoNotMakeALoop()
     {
         var a = _f.Parameter(_f.Cic, "@a", "1 /* nested /* @b */ @b */");
         var b = _f.Parameter(_f.Cic, "@b", "2 -- @a\n");
@@ -94,7 +99,7 @@ public sealed class WrapperTests : UnitTests
 
     [TestCase("id>@p")] [TestCase("id<@p")] [TestCase("id%@p=0")]
     [TestCase("id&@p=0")] [TestCase("id|@p=0")] [TestCase("id^@p=0")]
-    public void AdjacentOperatorsDoNotHideParameterDependencies(string predicate)
+    public void AParameterNameRightAfterAnOperatorIsStillFound(string predicate)
     {
         var p = _f.Parameter(_f.Cic, "@p", "CASE WHEN 5>@dependency THEN 1 ELSE 2 END");
         var dependency = _f.Parameter(_f.Cic, "@dependency", "3");
@@ -105,13 +110,32 @@ public sealed class WrapperTests : UnitTests
     }
 
     [Test]
-    public void RealCycleWarnsInCoreOrderAndReservedNameRefuses()
+    public void ParametersThatReferToEachOtherInALoopGiveAWarning()
     {
         var a = _f.Parameter(_f.Cic, "@a", "@b"); var b = _f.Parameter(_f.Cic, "@b", "@a");
         var fragment = Wrap("SELECT @a AS id", parameters: [a, b]);
-        Assert.That(fragment.Warnings.Single(), Does.Contain("@a").And.Contain("@b"));
+        Assert.That(fragment.Warnings.Single(), Does.StartWith("Parameters @a, @b refer to each other in a loop."));
+    }
+
+    [Test]
+    public void TheParameterNameThePluginUsesForItsCheckIsRefusedInAnyCase()
+    {
         var reserved = _f.Parameter(_f.Cic, "@RDMP_LINKED_DB", "1");
         Assert.That(Assert.Throws<LinkedServerRenderException>(() => Wrap("SELECT 1 AS id", parameters: [reserved]))!.Reason,
             Is.EqualTo(LinkedServerRenderReason.ReservedParameterName));
+    }
+
+    [Test]
+    public void ParameterNamesThatDifferOnlyByCaseAreRefusedUntilOneIsRenamed()
+    {
+        // RDMP's parameter manager usually rejects such names first, so this calls the plugin's own check directly.
+        var lower = _f.Parameter(_f.Cic, "@p", "1"); var upper = _f.Parameter(_f.Cic, "@P", "2");
+        var warnings = new List<string>();
+        var ex = Assert.Throws<LinkedServerRenderException>(() => SqlParameterDependencies.Resolve("SELECT @p", [lower, upper], warnings));
+        Assert.That(ex!.Reason, Is.EqualTo(LinkedServerRenderReason.ParameterNamesClash));
+        Assert.That(ex.Message, Does.Contain("differ only by upper and lower case").And.Contain("Rename one of them."));
+        // The remedy works: after renaming one, the parameters resolve.
+        upper.ParameterSQL = "DECLARE @q AS int"; upper.SaveToDatabase();
+        Assert.That(SqlParameterDependencies.Resolve("SELECT @p", [lower, upper], warnings).Select(p => p.ParameterName), Is.EqualTo(new[] { "@p" }));
     }
 }

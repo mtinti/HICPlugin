@@ -8,6 +8,8 @@ using Rdmp.Core.Curation.Data;
 
 namespace RdmpLinkedServerCohortSql;
 
+/// <summary>Chooses which parameters the query on a linked server must declare, and in which order, so each one is declared
+/// after the parameters its value uses.</summary>
 internal static class SqlParameterDependencies
 {
     internal static IReadOnlyList<ISqlParameter> Resolve(string sql, IEnumerable<ISqlParameter> parameters,
@@ -16,8 +18,9 @@ internal static class SqlParameterDependencies
         var all = parameters.ToArray();
         var clash = all.GroupBy(p => p.ParameterName, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
         if (clash != null)
-            throw new LinkedServerRenderException(LinkedServerRenderReason.ReservedParameterName,
-                $"parameters {string.Join(", ", clash.Select(p => p.ParameterName))} differ only by case; rename one");
+            throw new LinkedServerRenderException(LinkedServerRenderReason.ParameterNamesClash,
+                $"Parameters {string.Join(", ", clash.Select(p => p.ParameterName))} have names that differ only by upper and lower case, " +
+                "and SQL Server treats them as the same name.", "Rename one of them.");
         var byName = all.ToDictionary(p => p.ParameterName, StringComparer.OrdinalIgnoreCase);
         var edges = all.ToDictionary(p => p.ParameterName,
             p => Names(p.Value).Where(n => byName.ContainsKey(n) &&
@@ -37,8 +40,8 @@ internal static class SqlParameterDependencies
             var next = remaining.FindIndex(p => edges[p.ParameterName].All(emitted.Contains));
             if (next < 0)
             {
-                warnings.Add("Cyclic parameter dependencies: " + string.Join(", ", remaining.Select(p => p.ParameterName)) +
-                    ". Declarations retain core order; resolve the cycle before executing the SQL.");
+                warnings.Add("Parameters " + string.Join(", ", remaining.Select(p => p.ParameterName)) + " refer to each other in a loop. " +
+                    "The script declares them in RDMP's order, and SQL Server cannot run that. Change their values to remove the loop.");
                 return all.Where(p => needed.Contains(p.ParameterName)).ToArray();
             }
             var parameter = remaining[next];
@@ -52,8 +55,8 @@ internal static class SqlParameterDependencies
     private static IEnumerable<string> Names(string sql) =>
         QuerySyntaxHelper.GetAllParameterNamesFromQuery(WithoutCommentsAndLiterals(sql ?? ""));
 
-    // Preserve token boundaries, including newlines, while ignoring literals, quoted identifiers,
-    // nested block comments and line comments. FAnsi remains the parameter-name parser.
+    // Blanks out string literals, quoted names and comments (including nested /* */ comments), so FAnsi finds parameter
+    // names only in real SQL. Newlines stay, so a -- comment still ends where it did.
     internal static string WithoutCommentsAndLiterals(string sql)
     {
         var result = new StringBuilder(sql.Length);
@@ -90,8 +93,8 @@ internal static class SqlParameterDependencies
                         else break;
                     }
             }
-            // The released FAnsi parser misses names after some SQL Server operators (e.g. >@p,
-            // %@p). Normalise separators only in this analysis copy; never rewrite emitted SQL.
+            // FAnsi misses a parameter name right after some operators, for example >@p or %@p. This copy is only for
+            // finding names, so replacing those operators with spaces here never changes the SQL the plugin writes.
             else result.Append(c is '>' or '<' or '%' or '!' or '&' or '|' or '^' or '~' ? ' ' : c);
         }
         return result.ToString();

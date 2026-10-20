@@ -4,15 +4,16 @@
 
 namespace RdmpLinkedServerCohortSql;
 
-/// <summary>The composite shape: one statement, for reading (plan 0.7.1).</summary>
+/// <summary>Writes the script for inspection only: RDMP's own one-statement SQL, with the parts on linked servers read
+/// through OPENQUERY.</summary>
 internal static class CompositeScriptWriter
 {
     internal static LinkedServerCohortSqlResult Write(RenderedCohort rendered)
     {
         var sql = SqlServerOpenQueryWrapper.UseDatabase(rendered.HomeDatabase, rendered.Syntax) + Environment.NewLine +
             rendered.Declarations + LinkedServerCohortSqlBuilder.WriteContainer(rendered.Root, set => rendered.PlacementOf(set).LeafToken);
-        // Leaf text is spliced in after the walk so indentation never reaches a multi-line string literal (plan 0.7.9.2),
-        // and remote SQL after that, so it stays opaque to core parameter renaming and indentation.
+        // The SQL of each set goes in after the tree is indented, so indenting never changes a string that spans several
+        // lines. The SQL for linked servers goes in last, so RDMP's parameter renaming and indenting never touch it.
         foreach (var placement in rendered.Placements)
             sql = sql.Replace(placement.LeafToken, placement.HomeSql, StringComparison.Ordinal);
         foreach (var placement in rendered.Placements.Where(p => p.Kind != SetPlacementKind.Home))

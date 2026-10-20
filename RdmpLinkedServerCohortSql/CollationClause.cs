@@ -6,6 +6,10 @@ using Rdmp.Core.Curation.Data.Aggregation;
 
 namespace RdmpLinkedServerCohortSql;
 
+/// <summary>
+/// Decides whether the identifier of a set on a linked server needs COLLATE to compare with the home identifier. It adds
+/// the home column's collation only when both are plain text columns with different collations recorded in the catalogue.
+/// </summary>
 internal static class CollationClause
 {
     internal static bool IsPlain(AggregateDimension dimension) => dimension.ColumnInfo != null &&

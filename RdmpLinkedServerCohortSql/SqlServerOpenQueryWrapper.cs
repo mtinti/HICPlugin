@@ -9,6 +9,11 @@ using Rdmp.Core.QueryBuilding;
 
 namespace RdmpLinkedServerCohortSql;
 
+/// <summary>
+/// Wraps the SQL of a set that lives on a linked server in OPENQUERY, so the home server can run it. The query on the linked
+/// server takes one of two forms (<see cref="RemoteBatchForm"/>): the USE form, which switches to the right database itself,
+/// or the checked form, which runs in the link login's default database after checking that it is the right one.
+/// </summary>
 internal static class SqlServerOpenQueryWrapper
 {
     internal const string ReservedParameter = "@rdmp_linked_db";
@@ -25,15 +30,17 @@ internal static class SqlServerOpenQueryWrapper
     public static OpenQueryFragment Wrap(CohortQueryBuilderDependencySql block, ITableInfo remoteTable,
         RemoteBatchForm form, IReadOnlyList<ResultColumn> resultColumns)
     {
+        // The builder checks these first; the wrapper repeats the checks because it can also be called on its own.
         if (remoteTable.DatabaseType != DatabaseType.MicrosoftSQLServer)
             throw new LinkedServerRenderException(LinkedServerRenderReason.UnsupportedRemoteDatabaseType,
-                $"Table {remoteTable} on {remoteTable.Server} uses {remoteTable.DatabaseType}; use SQL Server tables.");
+                $"Table {remoteTable} is on server {remoteTable.Server}, which is a {remoteTable.DatabaseType} server. This plugin reads only from Microsoft SQL Server.");
         if (string.IsNullOrWhiteSpace(remoteTable.Server))
-            throw new LinkedServerRenderException(LinkedServerRenderReason.SetSpansServers,
-                $"Table {remoteTable} has no server; specify its server in the catalogue.");
+            throw new LinkedServerRenderException(LinkedServerRenderReason.ServerUnknown,
+                $"RDMP does not record a server for table {remoteTable}.", "Set the table's server in RDMP.");
         if (string.IsNullOrWhiteSpace(remoteTable.Database))
-            throw new LinkedServerRenderException(LinkedServerRenderReason.MultipleRemoteDatabases,
-                $"Table {remoteTable} on {remoteTable.Server} has no database; synchronise its catalogue metadata.");
+            throw new LinkedServerRenderException(LinkedServerRenderReason.RemoteDatabaseUnknown,
+                $"RDMP does not record which database table {remoteTable} on server {remoteTable.Server} is in.",
+                "Synchronise the table in RDMP so its database is recorded.");
 
         var syntax = remoteTable.GetQuerySyntaxHelper();
         var database = remoteTable.GetDatabaseRuntimeName();
@@ -42,7 +49,7 @@ internal static class SqlServerOpenQueryWrapper
         var parameters = block.ParametersUsed.GetFinalResolvedParametersList().ToArray();
         if (parameters.Any(p => string.Equals(p.ParameterName, ReservedParameter, StringComparison.OrdinalIgnoreCase)))
             throw new LinkedServerRenderException(LinkedServerRenderReason.ReservedParameterName,
-                $"Table {remoteTable} on {server}: rename parameter {ReservedParameter}; it is reserved for the database guard.");
+                $"The plugin uses the name {ReservedParameter} for its own database check.", "Rename your parameter.");
         var declarations = QueryBuilder.GetParameterDeclarationSQL(SqlParameterDependencies.Resolve(block.Sql, parameters, warnings));
         var nl = Environment.NewLine;
         var batch = "SET NOCOUNT ON;" + nl + declarations + block.Sql;
@@ -53,13 +60,15 @@ internal static class SqlServerOpenQueryWrapper
                 argument = "SET NOCOUNT ON;" + nl +
                     $"DECLARE {ReservedParameter} sysname = DB_NAME();" + nl +
                     $"IF {ReservedParameter} <> N'{Escape(database)}' " +
-                    "RAISERROR('RDMP linked-server cohort: link login default database through link %s is %s, expected %s; set the linked-server login default database (sp_addlinkedsrvlogin / ALTER LOGIN) or qualify objects three-part', 16, 1, " +
+                    "RAISERROR('RDMP linked-server cohort: the login that linked server %s uses has default database %s, but this query needs " +
+                    "database %s. Ask the DBA to change the default database of that login (ALTER LOGIN ... WITH DEFAULT_DATABASE on the linked server).', 16, 1, " +
                     $"N'{Escape(server)}', {ReservedParameter}, N'{Escape(database)}');" + nl + declarations + block.Sql;
                 break;
             case RemoteBatchForm.UseDatabase:
                 if (resultColumns == null || resultColumns.Count == 0)
                     throw new LinkedServerRenderException(LinkedServerRenderReason.RemoteResultTypeUnknown,
-                        $"Table {remoteTable} on {server}: the EXEC form needs named, typed result columns; synchronise metadata or alias expressions with an explicit CAST.");
+                        $"The USE form needs a name and a type for each column that linked server {server} returns, and none was given.",
+                        "Synchronise the table in RDMP, or write each expression as CAST(... AS type) AS name.");
                 argument = "EXEC('" + Escape(UseDatabase(database, syntax) + nl + batch) + "') WITH RESULT SETS ((" +
                     string.Join(", ", resultColumns.Select(c => DescribeColumn(c, syntax))) + "));";
                 break;
@@ -68,12 +77,12 @@ internal static class SqlServerOpenQueryWrapper
 
         var unicode = argument.Any(c => c > 127);
         var limit = unicode ? 4000 : 8000;
-        // SQL Server limits the decoded OPENQUERY argument, not the escaped source literal.
+        // SQL Server limits the length of the query text that OPENQUERY receives, after its doubled quotes are read as one.
         if (argument.Length > limit)
             throw new LinkedServerRenderException(LinkedServerRenderReason.BatchTooLong,
-                $"Table {remoteTable} on {server}: remote batch is {argument.Length} characters; limit {limit}" +
-                (unicode ? " (non-ASCII text requires a Unicode literal)." : " (ASCII literal).") +
-                " Shorten the filter or use the core cached cohort build.");
+                $"The query sent to linked server {server} is {argument.Length} characters long, but OPENQUERY accepts at most {limit}" +
+                (unicode ? " when the query contains non-ASCII text." : "."),
+                "Shorten the set's filters, or build this cohort with RDMP's normal cached build.");
         return new OpenQueryFragment($"OPENQUERY({QuoteIdentifier(server, syntax)}, {(unicode ? "N" : "")}'{Escape(argument)}')",
             warnings.AsReadOnly());
     }

@@ -7,9 +7,10 @@ using System.Text;
 namespace RdmpLinkedServerCohortSql;
 
 /// <summary>
-/// The staged shape, the one to execute (plan 0.7.2): far-side sets and patient index tables are copied into temp tables
-/// first, so each link is used for seconds; each home set then runs as its own statement into a temp table; the set
-/// arithmetic runs last over the temp tables. This mirrors RDMP's cached build, which runs each set on its own.
+/// Writes the staged script, the one to run. First it copies each set and patient index table that lives on a linked server
+/// into a temp table, so each linked server is busy for seconds only. Next it runs each set on the home server as its own
+/// statement into a temp table. Last it combines the temp tables with UNION, INTERSECT and EXCEPT, as the cohort tree says.
+/// RDMP's cached build also runs each set on its own.
 /// </summary>
 internal static class StagedScriptWriter
 {
@@ -17,11 +18,11 @@ internal static class StagedScriptWriter
 
     internal static LinkedServerCohortSqlResult Write(RenderedCohort rendered)
     {
-        if (!rendered.StagedChecked) throw new InvalidOperationException("Render the cohort with staged: true before writing the staged shape.");
+        if (!rendered.StagedChecked) throw new InvalidOperationException("Call Render with staged: true before writing the staged script.");
         var nl = Environment.NewLine;
         var syntax = rendered.Syntax;
 
-        // Step 5: far-side stages in order of first appearance in render order, one per far-side patient index table.
+        // First, copy the data that lives on linked servers: each remote set, and each remote patient index table once.
         var far = new List<(string Table, string Sql)>();
         foreach (var placement in rendered.Placements)
         {
@@ -30,10 +31,9 @@ internal static class StagedScriptWriter
             else if (placement.Kind == SetPlacementKind.HomeWithRemotePit && far.All(f => f.Table != placement.PitTempTable))
                 far.Add((placement.PitTempTable, FarStage(placement, placement.PitTempTable)));
         }
-        // Step 6: home stages in render order.
+        // Next, run each set on the home server into its own temp table.
         var home = rendered.Placements.Where(p => p.Kind != SetPlacementKind.RemoteWhole).Select(p => (Table: p.TempTable, Sql: HomeStage(p))).ToList();
         var tables = far.Select(f => f.Table).Concat(home.Select(h => h.Table)).Append(Result).ToArray();
-        var leaves = rendered.Placements;
 
         var sql = new StringBuilder();
         sql.Append(SqlServerOpenQueryWrapper.UseDatabase(rendered.HomeDatabase, syntax)).Append(nl);
@@ -45,12 +45,12 @@ internal static class StagedScriptWriter
         foreach (var (_, stage) in far) sql.Append(stage);
         foreach (var (_, stage) in home) sql.Append(stage);
 
-        // Step 7: the composite's arithmetic over the temp tables.
+        // Then combine the temp tables with the same set operations as the script for inspection.
         var arithmetic = LinkedServerCohortSqlBuilder.WriteContainer(rendered.Root, set => Projection(rendered.PlacementOf(set), rendered));
         sql.Append($"SELECT * INTO {Result} FROM").Append(arithmetic).Append("AS c").Append(nl).Append(';').Append(nl);
 
-        // Step 8: the count grid, one row per set in cohort tree order (the order of the arithmetic), with the set's ID
-        // and temp table so sets with the same name can be told apart, then the final cohort's total.
+        // Then the count table: one row per set, in the order the cohort tree combines them, then the final cohort. Each row
+        // shows the set's ID and temp table, so a user can tell apart two sets with the same name.
         var rows = LinkedServerCohortSqlBuilder.TreeOrder(rendered.Root).Select(set => rendered.PlacementOf(set))
             .Select((p, i) => $"SELECT {i + 1} AS [n], N'{Literal(p.Set.ToString())}' AS [set], {p.Set.ID} AS [id], N'{p.TempTable}' AS [table], COUNT(*) AS [rows] FROM {p.TempTable}")
             .ToList();
@@ -60,7 +60,7 @@ internal static class StagedScriptWriter
         // The cohort itself, last, so it is the script's final result set.
         sql.Append($"SELECT * FROM {Result}").Append(nl).Append(';').Append(nl);
 
-        // Steps 9 to 11.
+        // Last, switch the session settings back, both after success and after an error, and list the DROP lines.
         sql.Append("SET XACT_ABORT OFF;").Append(nl).Append("SET NOCOUNT OFF;").Append(nl).Append("END TRY").Append(nl)
             .Append("BEGIN CATCH").Append(nl).Append("SET XACT_ABORT OFF;").Append(nl).Append("SET NOCOUNT OFF;").Append(nl)
             .Append("THROW;").Append(nl).Append("END CATCH;").Append(nl)
@@ -71,8 +71,8 @@ internal static class StagedScriptWriter
 
     private static string Literal(string value) => value.Replace("'", "''");
 
-    // Declared columns without COLLATE: the temp table keeps each column's collation from the OPENQUERY result, exactly as
-    // the composite's OPENQUERY column carries it. A guarded block has no declared columns and stages everything.
+    // The copy lists the columns without COLLATE: the temp table keeps each column's collation from the OPENQUERY result,
+    // as the script for inspection does. A query in the checked form declares no columns, so the copy takes them all.
     private static string FarStage(SetPlacement placement, string table)
     {
         var columns = placement.RemoteBatchForm == RemoteBatchForm.Guarded ? "*" :
@@ -91,8 +91,9 @@ internal static class StagedScriptWriter
                Environment.NewLine + ";" + Environment.NewLine;
     }
 
-    // Plan 0.7.3: exactly the composite's outer leaf select list, in the same order and with the same names. A column
-    // carries COLLATE only where the composite's expression does, because a temp table column has implicit collation.
+    // Reads a set back from its temp table with the same columns, order and names as the script for inspection. A column
+    // gets COLLATE only where the set's own SQL ends with one, because a temp-table column keeps its collation but not the
+    // stronger effect of an explicit COLLATE.
     private static string Projection(SetPlacement placement, RenderedCohort rendered)
     {
         if (placement.Kind == SetPlacementKind.RemoteWhole)
@@ -106,8 +107,9 @@ internal static class StagedScriptWriter
     }
 
     /// <summary>
-    /// Plan 0.7.4: the index of the first whole-word FROM at parenthesis depth 0, skipping line comments, nested block
-    /// comments, string literals and quoted identifiers. Word boundaries follow SQL Server's Unicode-aware identifier rules.
+    /// Finds the main FROM of a set's SQL: the first whole word FROM outside all brackets. It skips comments (including nested
+    /// /* */ comments), string literals and quoted names. A word ends where SQL Server's rules for names say it does,
+    /// including for non-English letters.
     /// </summary>
     internal static int FindTopLevelFrom(string sql)
     {
@@ -126,8 +128,8 @@ internal static class StagedScriptWriter
                 return i;
             i++;
         }
-        throw new InvalidOperationException("No FROM at parenthesis depth 0 in the set's SQL; this is a bug in the staged writer:" +
-                                            Environment.NewLine + sql);
+        throw new InvalidOperationException("The staged script writer could not find the main FROM of the set's SQL (a FROM outside " +
+                                            "all brackets). This is a bug in the plugin; please report it with this SQL:" + Environment.NewLine + sql);
     }
 
     private static bool IsWordCharacter(char c) => char.IsLetterOrDigit(c) || char.IsSurrogate(c) || c is '_' or '@' or '#' or '$';

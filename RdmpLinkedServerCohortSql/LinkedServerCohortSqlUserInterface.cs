@@ -28,7 +28,7 @@ public sealed class LinkedServerCohortSqlUserInterface(IBasicActivateItems activ
     {
         if (model is CohortIdentificationConfiguration cic)
         {
-            // Staged first: it is the shape to run (plan 0.7.5).
+            // The staged script comes first, because it is the one to run.
             yield return new ExecuteCommandViewCohortLinkedServerSql(BasicActivator, cic, askForFile: false, staged: true);
             yield return new ExecuteCommandViewCohortLinkedServerSql(BasicActivator, cic, askForFile: true, staged: true);
             yield return new ExecuteCommandViewCohortLinkedServerSql(BasicActivator, cic, askForFile: false, staged: false);

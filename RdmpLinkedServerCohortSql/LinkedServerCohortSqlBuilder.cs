@@ -22,7 +22,7 @@ internal sealed class LinkedServerCohortSqlBuilder
 
     public LinkedServerCohortSqlResult Build(CohortIdentificationConfiguration cic) => Build(cic, staged: false);
 
-    /// <summary>Renders the cohort as the composite (one statement, for reading) or the staged script (to run), plan 0.7.</summary>
+    /// <summary>Writes the cohort as the staged script (to run) or as the script for inspection only (one statement).</summary>
     public LinkedServerCohortSqlResult Build(CohortIdentificationConfiguration cic, bool staged)
     {
         var rendered = Render(cic, staged);
@@ -30,16 +30,17 @@ internal sealed class LinkedServerCohortSqlBuilder
     }
 
     /// <summary>
-    /// Phases 1, 4 and 5, shared by both shapes. With <paramref name="staged"/> the staged refusals run in phase 1 and the
-    /// result also carries what the staged writer needs, so one render feeds both writers.
+    /// Checks the cohort, decides where each set runs, and writes the SQL of each set. Both scripts start from this result.
+    /// With <paramref name="staged"/>, the checks that only the staged script needs also run, before any SQL is written.
     /// </summary>
     internal RenderedCohort Render(CohortIdentificationConfiguration cic, bool staged)
     {
         ArgumentNullException.ThrowIfNull(cic);
         var root = cic.RootCohortAggregateContainer;
-        if (root == null) throw Error(LinkedServerRenderReason.EmptyContainer, cic, "create a root container and add a set");
+        if (root == null) throw Error(LinkedServerRenderReason.EmptyContainer, cic,
+            "The cohort has no sets yet (it has no top-level UNION, INTERSECT or EXCEPT container).", "Add a set first.");
         var sets = Walk(root).OrderBy(s => s.Order).ToArray();
-        // Validate API/PIT structure before any core rendering can instantiate third-party compilers.
+        // Check API sets and patient index tables first: RDMP's query builder can load plugin code when it writes SQL.
         foreach (var set in sets)
         {
             CheckApi(set);
@@ -48,19 +49,23 @@ internal sealed class LinkedServerCohortSqlBuilder
             if (pit == null) continue;
             CheckApi(pit);
             if (pit.PatientIndexJoinablesUsed.Any())
-                throw Error(LinkedServerRenderReason.NestedPatientIndexTable, set, $"patient index {pit} itself uses a patient index; flatten that dependency");
+                throw Error(LinkedServerRenderReason.NestedPatientIndexTable, set,
+                    $"It uses patient index table {pit}, which itself uses another patient index table. This plugin supports only one level.",
+                    $"Change {pit} so that it does not use another patient index table, or use RDMP's cached build for this cohort.");
         }
 
         var first = sets.FirstOrDefault(s => s.Catalogue.GetTableInfoList(false).Any());
         if (first == null)
         {
-            // Preserve core's detailed invalid-aggregate error for non-API sets without tables.
+            // RDMP's query builder gives a more precise error for a set without tables, so let it speak first.
             foreach (var set in sets) CohortQueryBuilderHelper.GetSQLForAggregate(set, new QueryBuilderArgs(null, cic.GetAllParameters()));
-            throw Error(LinkedServerRenderReason.EmptyContainer, cic, "add an enabled set with table metadata");
+            throw Error(LinkedServerRenderReason.EmptyContainer, cic,
+                "None of the cohort's enabled sets reads a table that RDMP's catalogue knows.", "Add or enable a set that reads a table.");
         }
         var home = Tables(first).First();
         if (home.DatabaseType != DatabaseType.MicrosoftSQLServer)
-            throw Error(LinkedServerRenderReason.UnsupportedHomeDatabaseType, first, $"home server {home.Server} uses {home.DatabaseType}; use SQL Server tables");
+            throw Error(LinkedServerRenderReason.UnsupportedHomeDatabaseType, first,
+                $"The home server {home.Server}, where the script would run, is a {home.DatabaseType} server. This plugin writes SQL only for Microsoft SQL Server.");
         ValidateGroup(first, Tables(first));
         CheckDatabase(home, true);
         var syntax = home.GetQuerySyntaxHelper();
@@ -72,11 +77,10 @@ internal sealed class LinkedServerCohortSqlBuilder
         warnings.AddRange(TopXWarnings(placements));
         if (staged) CheckStaged(placements);
 
-        // Prefer the EXEC USE form for every remote block: it does not depend on the link login's
-        // default database, which in practice is often master (first real run, 2026-10-17: a cohort
-        // with a single far-side database hit the guard with "is master, expected <db>"). The guarded
-        // form is only the fallback when a result column's type or collation cannot be derived from
-        // the catalogue; it still fails loudly rather than running in the wrong database.
+        // Each query on a linked server uses the USE form when it can. That form switches to the right database itself,
+        // so it works whatever the link login's default database is, and that default is often master. The plugin falls
+        // back to the checked form only when it cannot describe the set's columns. The checked form stops with an error,
+        // rather than running in the wrong database.
         foreach (var placement in remotes)
         {
             try
@@ -87,8 +91,9 @@ internal sealed class LinkedServerCohortSqlBuilder
             catch (LinkedServerRenderException ex) when (ex.Reason == LinkedServerRenderReason.RemoteResultTypeUnknown)
             {
                 placement.RemoteBatchForm = RemoteBatchForm.Guarded;
-                warnings.Add($"Set {placement.Set}: guarded form used because {ex.Message} The link login's default database must be " +
-                             $"{placement.RemoteTables[0].GetDatabaseRuntimeName()} or the batch fails with Msg 50000.");
+                warnings.Add($"{Capitalise(Describe(placement.RemoteAggregate))}: the plugin could not describe its columns. {ex.Detail} " +
+                             $"So the query on linked server {placement.RemoteTables[0].Server.Trim()} runs in the login's default database, " +
+                             $"which must be {placement.RemoteTables[0].GetDatabaseRuntimeName()}. If it is not, the query stops with an error that names both databases.");
             }
         }
 
@@ -103,7 +108,8 @@ internal sealed class LinkedServerCohortSqlBuilder
 
             if (placement.Kind == SetPlacementKind.HomeWithRemotePit)
             {
-                // Even SELECT * needs a named identifier for the enclosing core join.
+                // RDMP joins the set to its patient index table by the identifier's name, so the identifier needs a name
+                // even when the patient index table is read with SELECT *.
                 _ = SqlServerResultColumnResolver.DimensionName(Identifier(placement.Pit));
                 placement.Collation = CollationClause.Decide(Identifier(placement.Set), Identifier(placement.Pit));
                 Wrap(placement, pitBlock, warnings);
@@ -128,15 +134,18 @@ internal sealed class LinkedServerCohortSqlBuilder
             QueryBuilder.GetParameterDeclarationSQL(pm.GetFinalResolvedParametersList()), warnings, touched, syntax, staged);
     }
 
-    /// <summary>Plan 0.7.3b: core writes TOP X without ORDER BY, so which rows a TOP X set or patient index keeps is not deterministic.</summary>
+    /// <summary>RDMP writes TOP X without ORDER BY, so SQL Server may keep different rows of such a set on each run.</summary>
     private static IEnumerable<string> TopXWarnings(SetPlacement[] placements) => placements
         .SelectMany(p => p.Pit == null ? new[] { p.Set } : new[] { p.Set, p.Pit }).Distinct()
         .Select(a => (Aggregate: a, TopX: a.GetTopXIfAny())).Where(x => x.TopX != null)
-        .Select(x => $"{x.Aggregate} uses TOP {x.TopX.TopX} without ORDER BY; membership is not deterministic and can differ between runs, between shapes and from the cache.");
+        .Select(x => $"{Capitalise(Describe(x.Aggregate))} keeps only {x.TopX.TopX} rows (TOP {x.TopX.TopX}) but has no ORDER BY, so SQL Server " +
+                     "may pick different rows on each run. The patients in this set, and so in the cohort, can differ between runs, " +
+                     "between the two scripts and from the cached build.");
 
     /// <summary>
-    /// Plan 0.7.3, staged shape only, before any SQL is rendered: every leaf column must have a name (SELECT INTO), a
-    /// known position (the projections are positional) and, for home leaves, a collation a temp table keeps.
+    /// The checks that only the staged script needs, run before any SQL is written. The staged script copies each set into a
+    /// temp table with SELECT INTO, so every column needs a name. It then reads the columns back by position, so it needs
+    /// RDMP's exact column order. For sets on the home server, each column must also keep its collation in the temp table.
     /// </summary>
     private static void CheckStaged(SetPlacement[] placements)
     {
@@ -147,15 +156,23 @@ internal sealed class LinkedServerCohortSqlBuilder
                 var columns = CoreSelectList.For(placement.Set, out var orderProblem);
                 if (orderProblem != null)
                     throw Error(LinkedServerRenderReason.StagedColumnOrderAmbiguous, placement.Set,
-                        orderProblem + " (the staged shape needs core's column order; the composite still renders, to read)");
+                        "The staged script needs the exact order of this set's columns. " + orderProblem, InspectionHint);
                 CheckNames(placement.Set, columns);
                 var resolver = new SqlServerResultColumnResolver(placement.Set);
                 foreach (var column in columns)
                 {
                     var problem = resolver.HomeCollationProblem(column);
-                    if (problem != null)
+                    if (problem == null) continue;
+                    var copy = $"The staged script cannot copy column {column.Expression} into a temp table without changing how its text compares.";
+                    if (SqlServerResultColumnResolver.HasInnerCollate(column.Expression))
                         throw Error(LinkedServerRenderReason.StagedCollationUnknown, placement.Set,
-                            $"column {column.Expression} cannot be staged because {problem}; add a trailing COLLATE, or use the composite to read");
+                            $"{copy} The expression uses COLLATE inside it, for example MIN(col COLLATE ...). A temp table cannot keep the effect " +
+                            "of that COLLATE, and another COLLATE at the end does not help.",
+                            "Moving the COLLATE to the end can change the result, so compare the set's result before and after any change, " +
+                            "or use RDMP's cached build for this cohort.");
+                    throw Error(LinkedServerRenderReason.StagedCollationUnknown, placement.Set, $"{copy} {problem}",
+                        "Add COLLATE <collation name> at the end of the column's SQL, using the collation of the columns it is compared with. " +
+                        InspectionHint);
                 }
                 placement.HomeColumns = columns;
             }
@@ -169,11 +186,13 @@ internal sealed class LinkedServerCohortSqlBuilder
         var unnamed = columns.FirstOrDefault(c => c.Name == null);
         if (unnamed != null)
             throw Error(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias, aggregate,
-                $"expression {unnamed.Expression} needs an explicit alias, because SELECT INTO needs a name for every column");
+                $"Column {unnamed.Expression} has no name. The staged script copies each set into a temp table, and every column of a table needs a name.",
+                $"Give the column an alias, for example {unnamed.Expression} AS name.");
         var duplicate = columns.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
         if (duplicate != null)
             throw Error(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias, aggregate,
-                $"{duplicate.Count()} columns are named {duplicate.Key} (names are compared ignoring case); alias them apart, because SELECT INTO needs distinct names");
+                $"{duplicate.Count()} columns are named {duplicate.Key} (SQL Server ignores case in column names). A temp table cannot have two columns with the same name.",
+                "Give them different aliases.");
     }
 
     private static SetPlacement Classify(AggregateConfiguration set, ITableInfo home)
@@ -191,20 +210,24 @@ internal sealed class LinkedServerCohortSqlBuilder
         {
             if (table.DatabaseType != DatabaseType.MicrosoftSQLServer)
                 throw Error(LinkedServerRenderReason.UnsupportedRemoteDatabaseType, set,
-                    $"table {table} on {table.Server} uses {table.DatabaseType}; use SQL Server tables");
+                    $"Table {table} is on server {table.Server}, which is a {table.DatabaseType} server. This plugin reads only from Microsoft SQL Server.");
             CheckDatabase(table, SameServer(table, home));
         }
         if (!atHome && pitTables.Length > 0 && !SameServer(tables[0], pitTables[0]))
             throw Error(LinkedServerRenderReason.JoinSpansServers, set,
-                $"set server {tables[0].Server} and patient index server {pitTables[0].Server} differ; place the set and its patient index on one remote server, or make the set home");
+                $"The set is on server {tables[0].Server}, but its patient index table is on server {pitTables[0].Server}.",
+                $"Put both on the same server: the home server {home.Server}, or one linked server.");
         var placement = new SetPlacement(set, tables, join, pit, pitTables, kind);
         if (kind != SetPlacementKind.Home && placement.RemoteTables.Select(t => t.GetDatabaseRuntimeName()).Distinct(ServerComparer).Count() != 1)
             throw Error(LinkedServerRenderReason.MultipleRemoteDatabases, set,
-                $"remote block on {placement.RemoteTables.FirstOrDefault()?.Server} spans databases {string.Join(", ", placement.RemoteTables.Select(t => t.Database))}; keep each remote set/PIT block in one database");
+                $"{(pit == null ? "This set reads" : "This set and its patient index table read")} tables from more than one database on linked server " +
+                $"{placement.RemoteTables.FirstOrDefault()?.Server} ({string.Join(", ", placement.RemoteTables.Select(t => t.Database))}). This plugin " +
+                "sends one query per set to a linked server, and that query uses one database. This is a limit of the plugin, not of SQL Server.",
+                "Use RDMP's cached build for this cohort.");
         return placement;
     }
 
-    /// <summary>The enabled sets in cohort tree order, the order the container walk writes them.</summary>
+    /// <summary>The enabled sets in the order the cohort tree combines them, which is the order <see cref="WriteContainer"/> writes them.</summary>
     internal static IReadOnlyList<AggregateConfiguration> TreeOrder(CohortAggregateContainer root)
     {
         var sets = new List<AggregateConfiguration>();
@@ -216,12 +239,11 @@ internal sealed class LinkedServerCohortSqlBuilder
     {
         var children = EnabledChildren(container);
         if (container.IsDisabled || children.Length == 0)
-            throw Error(LinkedServerRenderReason.EmptyContainer, container, "add an enabled set or disable the empty child container");
-        // Core's CohortQueryBuilderResult.BuildFor takes the child provider's list and does a stable
-        // OrderBy(Order). That list is produced by CatalogueChildProvider.GetChildren, which sorts by
-        // ToString() (a tree display sort, not a contract; CatalogueChildProvider.cs:1614) over a set
-        // built containers-first. Reproduce the same effective key: ToString, then Order, then
-        // containers before sets.
+            throw Error(LinkedServerRenderReason.EmptyContainer, container, "It has no enabled set.",
+                "Add or enable a set, or disable the empty container.");
+        // RDMP orders the sets in two steps, and the plugin repeats both. RDMP's tree lists a container's children sorted by
+        // display name, containers first (CatalogueChildProvider.GetChildren). RDMP's query builder then sorts that list by
+        // Order, keeping the earlier order for equal values. The result is: display name, then Order, then containers first.
         foreach (var child in children.OrderBy(c => c.ToString())
                      .ThenBy(c => c.Order).ThenBy(c => c is CohortAggregateContainer ? 0 : 1))
             if (child is CohortAggregateContainer sub)
@@ -234,12 +256,14 @@ internal sealed class LinkedServerCohortSqlBuilder
         .Where(c => c is not CohortAggregateContainer sub || UserSettings.StrictValidationForCohortBuilderContainers || sub.GetOrderedContents().Any())
         .ToArray();
 
-    /// <summary>The container walk shared by both shapes: same parentheses, operators and indentation as core.
-    /// <paramref name="leaf"/> gives a leaf's text, which must be a single line (tokens or projections).</summary>
-    internal static string WriteContainer(CohortAggregateContainer container, Func<AggregateConfiguration, string> leaf, int tabs = 0)
+    /// <summary>Writes the cohort tree with the same brackets, set operations and indentation as RDMP's query builder. Both
+    /// scripts use it. <paramref name="setText"/> gives the text for one set, which must be a single line, because this method
+    /// indents it.</summary>
+    internal static string WriteContainer(CohortAggregateContainer container, Func<AggregateConfiguration, string> setText, int tabs = 0)
     {
         var children = EnabledChildren(container);
-        if (children.Length == 0) throw Error(LinkedServerRenderReason.EmptyContainer, container, "add an enabled set");
+        if (children.Length == 0)
+            throw Error(LinkedServerRenderReason.EmptyContainer, container, "It has no enabled set.", "Add or enable a set, or disable the empty container.");
         var nl = Environment.NewLine;
         var sql = nl + CohortQueryBuilderHelper.TabIn("(", tabs) + nl;
         for (var i = 0; i < children.Length; i++)
@@ -253,8 +277,8 @@ internal sealed class LinkedServerCohortSqlBuilder
                 };
                 sql += nl + CohortQueryBuilderHelper.TabIn(operation + nl + nl, tabs);
             }
-            sql += children[i] is CohortAggregateContainer sub ? WriteContainer(sub, leaf, tabs + 1) :
-                CohortQueryBuilderHelper.TabIn(leaf((AggregateConfiguration)children[i]), tabs);
+            sql += children[i] is CohortAggregateContainer sub ? WriteContainer(sub, setText, tabs + 1) :
+                CohortQueryBuilderHelper.TabIn(setText((AggregateConfiguration)children[i]), tabs);
         }
         return sql + nl + CohortQueryBuilderHelper.TabIn(")", tabs) + nl;
     }
@@ -271,7 +295,9 @@ internal sealed class LinkedServerCohortSqlBuilder
         {
             syntax.SplitLineIntoSelectSQLAndAlias(p.Pit.CountSQL, out _, out var alias);
             if (string.IsNullOrWhiteSpace(alias))
-                throw Error(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias, p.Pit, "give CountSQL an alias so the collation projection can name it");
+                throw Error(LinkedServerRenderReason.ExpressionIdentifierNeedsAlias, p.Pit,
+                    "Its count column has no alias. The script must name every column when it adds COLLATE to the patient identifier.",
+                    "Give the count an alias, for example COUNT(*) AS n.");
             columns.Add(syntax.EnsureWrapped(alias));
         }
         return "SELECT " + string.Join(", ", columns) + " FROM " + p.Placeholder;
@@ -285,26 +311,31 @@ internal sealed class LinkedServerCohortSqlBuilder
             p.RemoteSql = fragment.Sql;
             warnings.AddRange(fragment.Warnings.Select(w => $"Set {p.Set}: {w}"));
         }
-        catch (LinkedServerRenderException ex) { throw Error(ex.Reason, p.Set, ex.Message); }
+        catch (LinkedServerRenderException ex) { throw ex.About(Describe(p.RemoteAggregate)); }
     }
 
     private static JoinableCohortAggregateConfigurationUse GetJoin(AggregateConfiguration set)
     {
         var joins = set.PatientIndexJoinablesUsed.ToArray();
-        if (joins.Length > 1) throw Error(LinkedServerRenderReason.MultiplePatientIndexTables, set, "use at most one patient index per set");
+        if (joins.Length > 1)
+            throw Error(LinkedServerRenderReason.MultiplePatientIndexTables, set,
+                $"It joins {joins.Length} patient index tables. This plugin supports one patient index table per set.", "Use RDMP's cached build for this cohort.");
         return joins.SingleOrDefault();
     }
 
     private static void CheckApi(AggregateConfiguration set)
     {
-        if (set.Catalogue.IsApiCall()) throw Error(LinkedServerRenderReason.ApiSetRequiresCache, set, "API sets require the core cached cohort build");
+        if (set.Catalogue.IsApiCall())
+            throw Error(LinkedServerRenderReason.ApiSetRequiresCache, set, "It reads from an API, not from a table.",
+                "Build this cohort with RDMP's normal cached build.");
     }
 
     private static void CheckDatabase(ITableInfo table, bool home)
     {
         if (string.IsNullOrWhiteSpace(table.Database) || string.IsNullOrWhiteSpace(table.GetDatabaseRuntimeName()))
-            throw Error(home ? LinkedServerRenderReason.HomeDatabaseUnknown : LinkedServerRenderReason.MultipleRemoteDatabases,
-                table, $"no database on server {table.Server}; synchronise the table metadata");
+            throw Error(home ? LinkedServerRenderReason.HomeDatabaseUnknown : LinkedServerRenderReason.RemoteDatabaseUnknown, table,
+                $"RDMP does not record which database this table on server {table.Server} is in.",
+                "Synchronise the table in RDMP so its database is recorded.");
     }
 
     private static ITableInfo[] Tables(AggregateConfiguration set) => set.Catalogue.GetTableInfoList(false).OrderBy(t => t.ID).ToArray();
@@ -313,10 +344,33 @@ internal sealed class LinkedServerCohortSqlBuilder
     private static void ValidateGroup(AggregateConfiguration set, ITableInfo[] tables)
     {
         foreach (var table in tables)
-            if (string.IsNullOrWhiteSpace(table.Server) || !SameServer(tables[0], table))
+        {
+            if (string.IsNullOrWhiteSpace(table.Server))
+                throw Error(LinkedServerRenderReason.ServerUnknown, set, $"RDMP does not record a server for its table {table}.",
+                    "Set the table's server in RDMP.");
+            if (!SameServer(tables[0], table))
                 throw Error(LinkedServerRenderReason.SetSpansServers, set,
-                    $"table {table} has server '{table.Server}' ({table.DatabaseType}), compared with '{tables[0].Server}' ({tables[0].DatabaseType}); give every table in the set one server and DBMS");
+                    $"Its tables are on different servers: {table} is on {table.Server} ({table.DatabaseType}), but {tables[0]} is on " +
+                    $"{tables[0].Server} ({tables[0].DatabaseType}).", "Put every table of a set on one server.");
+        }
     }
 
-    internal static LinkedServerRenderException Error(LinkedServerRenderReason reason, object subject, string detail) => new(reason, $"{subject}: {detail}.");
+    /// <summary>Points to the script for inspection, which still shows the cohort's SQL when the staged script cannot.</summary>
+    private static string InspectionHint =>
+        $"To see this cohort's SQL, open \"{ExecuteCommandViewCohortLinkedServerSql.Composite}\"; that script is for inspection only.";
+
+    internal static LinkedServerRenderException Error(LinkedServerRenderReason reason, object subject, string problem, string fix = null) =>
+        new(reason, problem, fix, Describe(subject));
+
+    /// <summary>Names what a message is about, as the user sees it in RDMP: "set X", "patient index table X", "cohort X".</summary>
+    internal static string Describe(object subject) => subject switch
+    {
+        AggregateConfiguration a => (a.IsJoinablePatientIndexTable() ? "patient index table " : "set ") + a,
+        CohortIdentificationConfiguration c => "cohort " + c.Name,
+        CohortAggregateContainer c => "container " + c,
+        ITableInfo t => "table " + t,
+        _ => subject?.ToString()
+    };
+
+    internal static string Capitalise(string text) => string.IsNullOrEmpty(text) ? text : char.ToUpperInvariant(text[0]) + text[1..];
 }

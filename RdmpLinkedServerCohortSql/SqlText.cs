@@ -4,7 +4,7 @@
 
 namespace RdmpLinkedServerCohortSql;
 
-/// <summary>Lexical helpers over T-SQL text that skip string literals, quoted identifiers and comments.</summary>
+/// <summary>Reads T-SQL text character by character, skipping string literals, quoted names and comments.</summary>
 internal static class SqlText
 {
     /// <summary>The index of the parenthesis closing the one at <paramref name="open"/>, or -1 if it is never closed.</summary>

@@ -8,6 +8,7 @@ using Rdmp.Core.Curation.Data.Cohort.Joinables;
 
 namespace RdmpLinkedServerCohortSql;
 
+/// <summary>Where one set runs (<see cref="SetPlacementKind"/>), and the SQL and temp tables the scripts use for it.</summary>
 internal sealed class SetPlacement(AggregateConfiguration set, ITableInfo[] setTables,
     JoinableCohortAggregateConfigurationUse join, AggregateConfiguration pit, ITableInfo[] pitTables,
     SetPlacementKind kind)
@@ -19,13 +20,14 @@ internal sealed class SetPlacement(AggregateConfiguration set, ITableInfo[] setT
     public ITableInfo[] PitTables { get; } = pitTables;
     public SetPlacementKind Kind { get; } = kind;
     public string Placeholder { get; } = $"/*LINKED_{Guid.NewGuid():N}*/";
-    /// <summary>Marks where the composite writes this leaf, so its text is spliced in untabbed (plan 0.7.9.2).</summary>
+    /// <summary>Marks where the script for inspection puts this set, so its SQL goes in after indenting.</summary>
     public string LeafToken { get; } = $"/*LEAF_{Guid.NewGuid():N}*/";
-    /// <summary>Staged shape: the temp table holding this leaf (plan 0.7.2).</summary>
+    /// <summary>Staged script: the temp table that holds this set.</summary>
     public string TempTable => (Kind == SetPlacementKind.RemoteWhole ? "#rdmp_r" : "#rdmp_s") + Set.ID;
-    /// <summary>Staged shape: the temp table holding a far-side patient index table, shared by its home consumers.</summary>
+    /// <summary>Staged script: the temp table that holds a patient index table copied from a linked server, shared by the
+    /// sets on the home server that use it.</summary>
     public string PitTempTable => Join == null ? null : "#rdmp_pit" + Join.JoinableCohortAggregateConfiguration_ID;
-    /// <summary>Staged shape, home leaves: core's select list for the set, in core's order.</summary>
+    /// <summary>Staged script, sets on the home server: the columns RDMP's query builder selects for the set, in its order.</summary>
     public IReadOnlyList<CoreColumn> HomeColumns { get; internal set; }
     public RemoteBatchForm RemoteBatchForm { get; internal set; }
     public IReadOnlyList<ResultColumn> ResultColumns { get; internal set; } = Array.Empty<ResultColumn>();

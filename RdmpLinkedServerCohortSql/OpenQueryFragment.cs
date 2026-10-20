@@ -4,4 +4,5 @@
 
 namespace RdmpLinkedServerCohortSql;
 
+/// <summary>The OPENQUERY call for one set on a linked server, and any warnings about it.</summary>
 internal sealed record OpenQueryFragment(string Sql, IReadOnlyList<string> Warnings);

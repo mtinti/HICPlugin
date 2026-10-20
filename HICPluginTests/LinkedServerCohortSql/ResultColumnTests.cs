@@ -13,6 +13,7 @@ using Tests.Common;
 
 namespace HICPluginTests;
 
+/// <summary>Tests of how the plugin works out the name, SQL type and collation of each column a remote set returns.</summary>
 public sealed class ResultColumnTests : UnitTests
 {
     [TestCase("COUNT(*)", "int", "int")]
@@ -26,7 +27,7 @@ public sealed class ResultColumnTests : UnitTests
     [TestCase("SUM(id)", "smallmoney", "money")]
     [TestCase("AVG(id)", "real", "float")]
     [TestCase("CAST(AVG(id) AS decimal(18,4))", "int", "decimal(18,4)")]
-    public void TypesFollowSqlServerRules(string expression, string source, string expected)
+    public void DeclaredTypesFollowSqlServerRules(string expression, string source, string expected)
     {
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", source, addToRoot: false);
@@ -37,7 +38,7 @@ public sealed class ResultColumnTests : UnitTests
     [TestCase("MIN(id)")]
     [TestCase("CAST(MIN(id) AS nvarchar(10))")]
     [TestCase("CAST([Db]..[T].[id] AS nvarchar(10))")]
-    public void CharacterResultsPreserveSourceCollation(string expression)
+    public void TextResultsKeepTheSourceColumnsCollation(string expression)
     {
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", "varchar(10)", "Latin1_General_CS_AS", addToRoot: false);
@@ -48,7 +49,7 @@ public sealed class ResultColumnTests : UnitTests
     [TestCase("DATEDIFF(day,id,GETDATE())", "datetime")]
     [TestCase("CAST(id AS varchar(10))", "int")]
     [TestCase("SUM(id)", "bit")]
-    public void UnsupportedOrUnknownCollationRefuses(string expression, string source)
+    public void ResolverRefusesExpressionsWhoseTypeOrCollationItCannotWorkOut(string expression, string source)
     {
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", source, addToRoot: false);
@@ -58,7 +59,7 @@ public sealed class ResultColumnTests : UnitTests
     }
 
     [Test]
-    public void DeclaredColumnsFollowDimensionOrderNotRowOrder()
+    public void WithACountTheDeclaredColumnsFollowOrderWithTheCountLast()
     {
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", "int", addToRoot: false);
@@ -68,28 +69,31 @@ public sealed class ResultColumnTests : UnitTests
         var last = f.AddDimension(pit, "d_last", "datetime", order: 1);
         pit.CountSQL = "COUNT(*) AS n";
         var declared = new SqlServerResultColumnResolver(pit).Resolve().Select(c => c.Name).ToArray();
-        // core's AggregateBuilder sorts the select list by Order with the count column last
+        // With a count, RDMP sorts the columns by Order and puts the count last.
         Assert.That(declared, Is.EqualTo(new[] { "d_first", "d_last", identifier.GetRuntimeName(), "n" }));
     }
 
     [Test]
-    public void DimensionsSharingAnOrderAreRefused()
+    public void ResolverRefusesTwoColumnsWithTheSameOrder()
     {
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", "int", addToRoot: false);
         pit.AggregateDimensions.Single().Order = 5; pit.AggregateDimensions.Single().SaveToDatabase();
         f.AddDimension(pit, "d", "datetime", order: 5);
-        pit.CountSQL = "COUNT(*) AS n"; // the sorted branch; without CountSQL/HAVING core keeps enumeration order
+        pit.CountSQL = "COUNT(*) AS n"; // a count makes RDMP sort by Order; without a count or HAVING it keeps the listed order
         var ex = Assert.Throws<LinkedServerRenderException>(() => new SqlServerResultColumnResolver(pit).Resolve());
         Assert.That(ex!.Reason, Is.EqualTo(LinkedServerRenderReason.RemoteResultTypeUnknown));
-        Assert.That(ex.Message, Does.Contain("share Order 5"));
+        Assert.That(ex.Message, Does.Contain("Two columns have Order 5, so RDMP may write them in either order. Give each column a different Order."));
+        // The remedy works: with different Orders, the columns can be declared.
+        pit.AggregateDimensions.Single(d => d.IsExtractionIdentifier).Order = 4; pit.AggregateDimensions.Single(d => d.IsExtractionIdentifier).SaveToDatabase();
+        pit.ClearAllInjections();
+        Assert.That(new SqlServerResultColumnResolver(pit).Resolve().Select(c => c.Name).Last(), Is.EqualTo("n"));
     }
 
     [Test]
-    public void WithoutCountOrHavingDeclarationFollowsEnumerationOrderNotOrder()
+    public void WithoutCountOrHavingTheDeclaredColumnsKeepTheListedOrder()
     {
-        // CohortQueryBuilderHelper preassembles "SELECT id, other" from AggregateDimensions in
-        // enumeration order when there is no CountSQL/HAVING; Order must not be applied there.
+        // Without a count or HAVING, RDMP writes "SELECT id, other" in the order the dimensions are listed, and ignores Order.
         var f = new CohortFixture(new MemoryDataExportRepository());
         var pit = f.Set("T", "remote", "Db", "int", addToRoot: false);
         var identifier = pit.AggregateDimensions.Single();
