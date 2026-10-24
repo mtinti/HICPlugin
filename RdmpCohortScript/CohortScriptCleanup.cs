@@ -136,7 +136,7 @@ internal sealed class CohortScriptCleanup
     {
         try
         {
-            return _locator.CatalogueRepository.AggregateForcedJoinManager.GetAllForcedJoinsFor(set).Any(t => t.ID == table.ID);
+            return SavedForcedJoins.Of(set).Any(t => t.ID == table.ID);
         }
         catch (Exception e)
         {
@@ -162,7 +162,7 @@ internal sealed class CohortScriptCleanup
             Delete(use, $"join use {use.ID}");
         foreach (var set in sets)
         {
-            foreach (var table in set.ForcedJoins)
+            foreach (var table in SavedForcedJoins.Of(set))
                 BreakForcedJoin(repository, set, table);
             if (set.GetTopXIfAny() is { } topX)
                 Delete(topX, $"Top X of set {set.ID}");

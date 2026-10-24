@@ -311,6 +311,26 @@ internal class CohortScriptRefreshTests : UnitTests
             });
     }
 
+    // with RDMP's "always join everything" setting on, RDMP lists the catalogue's main table as a forced join of the
+    // set, though none is saved; the database then refuses to remove it, because no row is deleted
+    [Test]
+    public void AJoinTheSettingAddsIsNotRemovedOrReportedAsLeft()
+    {
+        var activator = new RecordingActivator(_locator);
+        _repository.RefuseToRemoveAMissingForcedJoin = true;
+        var before = Counts();
+
+        var e = WithAlwaysJoinEverything(() => Assert.Throws<CohortScriptRebuildException>(() =>
+            RebuildWith(activator, ScriptThatFailsAtItsLastLine, $"Join everything {Guid.NewGuid():N}")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e!.Cleanup.Leftovers, Is.Empty, "A join that was never saved should not be reported as left.");
+            Assert.That(Counts(), Is.EqualTo(before), "Nothing the build made should be left.");
+            Assert.That(activator.Published, Is.Empty, "A clean-up that removed everything should not refresh RDMP.");
+        });
+    }
+
     [Test]
     public void ACleanupThatCannotCheckAnObjectSaysSo()
     {
@@ -442,6 +462,21 @@ internal class CohortScriptRefreshTests : UnitTests
         }
     }
 
+    // the setting is saved for the user, so it is put back whatever happens
+    internal static T WithAlwaysJoinEverything<T>(Func<T> action)
+    {
+        var was = UserSettings.AlwaysJoinEverything;
+        UserSettings.AlwaysJoinEverything = true;
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            UserSettings.AlwaysJoinEverything = was;
+        }
+    }
+
     private static string Script(params string[] lines) =>
         "cohort-script-format: \"1\"\nCommands:\n" + string.Concat(lines.Select(l => $"  - {YamlText.DoubleQuoted(l)}\n"));
 
@@ -534,8 +569,13 @@ internal sealed class FaultyRepository : MemoryDataExportRepository
     /// <summary>When true, a removal that throws has removed the forced join first.</summary>
     public bool BreakForcedJoinsBeforeFailing { get; set; }
 
+    /// <summary>When true, removing a forced join that is not saved throws, as the database does when no row is deleted.</summary>
+    public bool RefuseToRemoveAMissingForcedJoin { get; set; }
+
     public override void BreakLinkBetween(AggregateConfiguration configuration, ITableInfo tableInfo)
     {
+        if (RefuseToRemoveAMissingForcedJoin && !(ForcedJoins.TryGetValue(configuration, out var saved) && saved.Contains(tableInfo)))
+            throw new InvalidOperationException("No forced join was removed, because none is saved.");
         if (!FailToBreakForcedJoins || BreakForcedJoinsBeforeFailing)
             base.BreakLinkBetween(configuration, tableInfo);
         if (FailToBreakForcedJoins)
