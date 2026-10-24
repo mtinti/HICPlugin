@@ -19,8 +19,36 @@ using Rdmp.Core.MapsDirectlyToDatabaseTable;
 using RdmpCohortScript;
 using Rdmp.Core.Repositories;
 using Rdmp.Core.ReusableLibraryCode.Checks;
+using Rdmp.Core.ReusableLibraryCode.Settings;
 
 namespace HICPluginTests;
+
+/// <summary>
+/// Runs code with one of RDMP's user settings chosen. RDMP saves these for the user on this computer and reads them
+/// itself, so each is put back whatever happens.
+/// </summary>
+internal static class WithUserSetting
+{
+    public static T AlwaysJoinEverything<T>(bool on, Func<T> action) =>
+        With(() => UserSettings.AlwaysJoinEverything, v => UserSettings.AlwaysJoinEverything = v, on, action);
+
+    public static T SelectiveRefresh<T>(bool on, Func<T> action) =>
+        With(() => UserSettings.SelectiveRefresh, v => UserSettings.SelectiveRefresh = v, on, action);
+
+    private static T With<T>(Func<bool> get, Action<bool> set, bool on, Func<T> action)
+    {
+        var was = get();
+        set(on);
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            set(was);
+        }
+    }
+}
 
 /// <summary>Tables a set can force a join to.</summary>
 internal static class ForcedJoinTable

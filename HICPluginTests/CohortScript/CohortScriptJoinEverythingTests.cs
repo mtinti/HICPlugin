@@ -48,7 +48,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
     {
         var (cic, set) = Cohort(joinTheOtherTable: true);
 
-        var (listed, script) = CohortScriptRefreshTests.WithAlwaysJoinEverything(() =>
+        var (listed, script) = WithUserSetting.AlwaysJoinEverything(true, () =>
             (set.ForcedJoins.Select(t => t.ID).ToArray(), new BuildScriptWriter(cic, RepositoryLocator).Document()));
 
         var joins = script.Split('\n').Where(l => l.Contains("AddForcedJoin", StringComparison.Ordinal)).ToArray();
@@ -65,7 +65,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
     {
         var (cic, _) = Cohort(joinTheOtherTable: true);
 
-        var manifest = CohortScriptRefreshTests.WithAlwaysJoinEverything(() => new CatalogueManifestWriter(RepositoryLocator).ForCohort(cic));
+        var manifest = WithUserSetting.AlwaysJoinEverything(true, () => new CatalogueManifestWriter(RepositoryLocator).ForCohort(cic));
 
         var tables = manifest[manifest.IndexOf("\ntables:", StringComparison.Ordinal)..manifest.IndexOf("\nprojects:", StringComparison.Ordinal)];
         Assert.Multiple(() =>
@@ -81,7 +81,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
         var (cic, _) = Cohort(joinTheOtherTable: false);
         var name = $"Rebuilt {Guid.NewGuid():N}";
 
-        CohortScriptRefreshTests.WithAlwaysJoinEverything(() =>
+        WithUserSetting.AlwaysJoinEverything(true, () =>
         {
             Rebuild(new BuildScriptWriter(cic, RepositoryLocator).Document(), name);
             return 0;
@@ -89,7 +89,9 @@ internal class CohortScriptJoinEverythingTests : UnitTests
 
         var rebuilt = Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name).Single()
             .RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively().Single();
-        Assert.That(rebuilt.ForcedJoins, Is.Empty, "The rebuilt set should have no saved forced join, as the original had none.");
+        // with the setting off, RDMP's list is the saved joins, whatever this computer's setting is
+        Assert.That(WithUserSetting.AlwaysJoinEverything(false, () => rebuilt.ForcedJoins), Is.Empty,
+            "The rebuilt set should have no saved forced join, as the original had none.");
     }
 
     [Test]
@@ -101,7 +103,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
             $"AddCatalogueToCohortSet CohortAggregateContainer:$c2 Catalogue:{_catalogue.ID} \"{_catalogue.Name}\" \"{column}\" false => $a1 $a1.{column}",
             $"AddForcedJoin AggregateConfiguration:$a1 TableInfo:{_mainTable.ID} \"{_mainTable.Name}\"");
 
-        CohortScriptRefreshTests.WithAlwaysJoinEverything(() =>
+        WithUserSetting.AlwaysJoinEverything(true, () =>
         {
             Rebuild(script, name);
             return 0;
@@ -109,7 +111,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
 
         var set = Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name).Single()
             .RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively().Single();
-        Assert.That(set.ForcedJoins.Select(t => t.ID), Is.EqualTo(new[] { _mainTable.ID }),
+        Assert.That(WithUserSetting.AlwaysJoinEverything(false, () => set.ForcedJoins.Select(t => t.ID).ToArray()), Is.EqualTo(new[] { _mainTable.ID }),
             "The line should save a forced join to the main table, though RDMP already listed it with the setting on.");
     }
 
@@ -130,7 +132,7 @@ internal class CohortScriptJoinEverythingTests : UnitTests
             $"AddForcedJoin AggregateConfiguration:$a1 TableInfo:{main.ID} \"{main.Name}\"");
         var activator = new ConsoleInputManager(locator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true };
 
-        var e = CohortScriptRefreshTests.WithAlwaysJoinEverything(() => Assert.Throws<CohortScriptRebuildException>(() =>
+        var e = WithUserSetting.AlwaysJoinEverything(true, () => Assert.Throws<CohortScriptRebuildException>(() =>
             CohortScriptRefreshTests.RebuildWith(activator, script, $"Lost join {Guid.NewGuid():N}")));
 
         Assert.That(e!.Reason, Is.EqualTo(CohortScriptRefusal.LineHadNoEffect),
@@ -174,18 +176,23 @@ public class CohortScriptJoinEverythingDatabaseTests : CohortScriptLifecycleBase
         var main = catalogue.GetTableInfosIdeallyJustFromMainTables().Single();
         var other = ForcedJoinTable.JoinedTo(CatalogueRepository, catalogue.GetAllExtractionInformation(ExtractionCategory.Any).First());
         CatalogueRepository.AggregateForcedJoinManager.CreateLinkBetween(set, other);
-        CatalogueRepository.AggregateForcedJoinManager.CreateLinkBetween(set, main);
 
-        var (listed, saved, script) = CohortScriptRefreshTests.WithAlwaysJoinEverything(() =>
+        // first only the join to the other table is saved: the main table the setting adds must be left out
+        var (listed, saved, script) = WithUserSetting.AlwaysJoinEverything(true, () =>
             (set.ForcedJoins.Select(t => t.ID).ToArray(), SavedForcedJoins.Of(set).Select(t => t.ID).ToArray(),
                 new BuildScriptWriter(cic, RepositoryLocator).Document()));
 
         Assert.Multiple(() =>
         {
             Assert.That(listed, Has.Member(main.ID), "With the setting on, RDMP should list the main table, or this test checks nothing.");
-            Assert.That(saved, Is.EquivalentTo(new[] { other.ID, main.ID }), "Both saved forced joins should be read, the one to the main table too.");
-            Assert.That(script.Split('\n').Count(l => l.Contains("AddForcedJoin", StringComparison.Ordinal)), Is.EqualTo(2),
-                "The script should have the two saved forced joins.");
+            Assert.That(saved, Is.EqualTo(new[] { other.ID }), "Only the saved forced join should be read, not the main table the setting adds.");
+            Assert.That(script.Split('\n').Count(l => l.Contains("AddForcedJoin", StringComparison.Ordinal)), Is.EqualTo(1),
+                "The script should have one forced join, the saved one.");
         });
+
+        // then a join to the main table is saved too, and must be read although the setting also adds that table
+        CatalogueRepository.AggregateForcedJoinManager.CreateLinkBetween(set, main);
+        var both = WithUserSetting.AlwaysJoinEverything(true, () => SavedForcedJoins.Of(set).Select(t => t.ID).ToArray());
+        Assert.That(both, Is.EquivalentTo(new[] { other.ID, main.ID }), "Both saved forced joins should be read, the one to the main table too.");
     }
 }

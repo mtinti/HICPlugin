@@ -19,7 +19,6 @@ using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
 using Rdmp.Core.Repositories;
 using Rdmp.Core.ReusableLibraryCode.Checks;
-using Rdmp.Core.ReusableLibraryCode.Settings;
 using RdmpCohortScript;
 using Tests.Common;
 
@@ -238,7 +237,7 @@ internal class CohortScriptRefreshTests : UnitTests
         var activator = new RecordingActivator(_locator);
         _repository.RefuseDelete = o => o is AggregateConfiguration;
 
-        var e = WithSelectiveRefresh(selectiveRefresh, () => Assert.Throws<CohortScriptRebuildException>(() =>
+        var e = WithUserSetting.SelectiveRefresh(selectiveRefresh, () => Assert.Throws<CohortScriptRebuildException>(() =>
             RebuildWith(activator, ScriptThatFailsAtItsLastLine, $"Leftover {Guid.NewGuid():N}")));
 
         var set = _repository.GetAllObjects<AggregateConfiguration>().Single(a => a.Name.StartsWith($"cic_{e.Cleanup.Cohort.ID}_", StringComparison.Ordinal));
@@ -320,7 +319,7 @@ internal class CohortScriptRefreshTests : UnitTests
         _repository.RefuseToRemoveAMissingForcedJoin = true;
         var before = Counts();
 
-        var e = WithAlwaysJoinEverything(() => Assert.Throws<CohortScriptRebuildException>(() =>
+        var e = WithUserSetting.AlwaysJoinEverything(true, () => Assert.Throws<CohortScriptRebuildException>(() =>
             RebuildWith(activator, ScriptThatFailsAtItsLastLine, $"Join everything {Guid.NewGuid():N}")));
 
         Assert.Multiple(() =>
@@ -446,36 +445,6 @@ internal class CohortScriptRefreshTests : UnitTests
         ["filter containers"] = _repository.GetAllObjects<AggregateFilterContainer>().Length,
         ["project links"] = _repository.GetAllObjects<ProjectCohortIdentificationConfigurationAssociation>().Length
     };
-
-    // the setting is saved for the user, so it is put back whatever happens
-    private static T WithSelectiveRefresh<T>(bool on, Func<T> action)
-    {
-        var was = UserSettings.SelectiveRefresh;
-        UserSettings.SelectiveRefresh = on;
-        try
-        {
-            return action();
-        }
-        finally
-        {
-            UserSettings.SelectiveRefresh = was;
-        }
-    }
-
-    // the setting is saved for the user, so it is put back whatever happens
-    internal static T WithAlwaysJoinEverything<T>(Func<T> action)
-    {
-        var was = UserSettings.AlwaysJoinEverything;
-        UserSettings.AlwaysJoinEverything = true;
-        try
-        {
-            return action();
-        }
-        finally
-        {
-            UserSettings.AlwaysJoinEverything = was;
-        }
-    }
 
     private static string Script(params string[] lines) =>
         "cohort-script-format: \"1\"\nCommands:\n" + string.Concat(lines.Select(l => $"  - {YamlText.DoubleQuoted(l)}\n"));
