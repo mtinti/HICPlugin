@@ -16,15 +16,19 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
 {
     private readonly FileInfo _scriptFile;
     private readonly string _newName;
+    private readonly bool _acceptRenamed;
 
     public ExecuteCommandBuildCohortFromScript(IBasicActivateItems activator,
         [DemandsInitialization("The build.script.yaml to build the cohort from. In the GUI, leave it out to choose the file.")]
         FileInfo scriptFile,
         [DemandsInitialization("Name for the new cohort, which must be unique. In the GUI, leave it out to type it.")]
-        string newCohortName = null) : base(activator)
+        string newCohortName = null,
+        [DemandsInitialization("true to build even when a catalogue, table, project or published filter has been renamed since the export (a warning names each one). Leave out, or false, to refuse.")]
+        bool acceptRenamedObjects = false) : base(activator)
     {
         _scriptFile = scriptFile;
         _newName = newCohortName;
+        _acceptRenamed = acceptRenamedObjects;
         if (scriptFile != null && !scriptFile.Exists)
             SetImpossible($"There is no build script at {scriptFile.FullName}.");
     }
@@ -45,14 +49,30 @@ public class ExecuteCommandBuildCohortFromScript : BasicCommandExecution
 
         var problems = new List<CohortScriptProblem>();
         var lines = CohortScriptReader.Read(File.ReadAllText(file.FullName), problems);
-        new CohortScriptChecker(BasicActivator.RepositoryLocator, problems).Check(lines, newName);
+        var checker = new CohortScriptChecker(BasicActivator.RepositoryLocator, problems, _acceptRenamed);
+        checker.Check(lines, newName);
         if (problems.Count > 0)
             throw new CohortScriptProblemsException(file.FullName, problems);
 
-        var runner = new CohortScriptRunner(BasicActivator, newName);
-        runner.Run(lines.Parsed());
+        // the script deletes RDMP's automatic containers it does not use; in the GUI RDMP would ask about each one.
+        // The setting is restored whatever happens.
+        var interactiveDeletes = BasicActivator.InteractiveDeletes;
+        BasicActivator.InteractiveDeletes = false;
+        CohortScriptRunner runner;
+        try
+        {
+            runner = new CohortScriptRunner(BasicActivator, newName, _acceptRenamed);
+            runner.Run(lines.Parsed());
+        }
+        finally
+        {
+            BasicActivator.InteractiveDeletes = interactiveDeletes;
+        }
 
-        BasicActivator.Show($"Built cohort {runner.Cohort.ID} \"{runner.Cohort.Name}\" from {file.Name}.");
+        var warnings = checker.Warnings.Count == 0
+            ? ""
+            : $"{System.Environment.NewLine}{string.Join(System.Environment.NewLine, checker.Warnings)}";
+        BasicActivator.Show($"Built cohort {runner.Cohort.ID} \"{runner.Cohort.Name}\" from {file.Name}.{warnings}");
         Publish(runner.Cohort);
     }
 }

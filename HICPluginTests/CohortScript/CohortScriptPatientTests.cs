@@ -217,8 +217,115 @@ public class CohortScriptPatientTests : DatabaseTests
         AssertRebuildReturnsSamePatients(db, cic, new[] { P(1) });
     }
 
+    // the original, its rebuild from the exported script, and the same script typed line by line must all agree
+    [TestCase(false, TestName = "AMandatoryFilterChangedAfterTheExportDoesNotChangeTheRebuild(set)")]
+    [TestCase(true, TestName = "AMandatoryFilterChangedAfterTheExportDoesNotChangeTheRebuild(patient index table)")]
+    public void AMandatoryFilterChangedAfterTheExportDoesNotChangeTheRebuild(bool onPatientIndexTable)
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var people = Import(db, Table($"cs_mand_people_{onPatientIndexTable}", new[] { "chi", "age" },
+            new[] { (1, 19), (2, 25), (3, 16), (4, 30) }.Select(p => new object[] { P(p.Item1), p.Item2 })));
+        var age = people.GetAllExtractionInformation(ExtractionCategory.Any).Single(e => e.GetRuntimeName() == "age");
+        var mandatory = new ExtractionFilter(CatalogueRepository, "Adults", age) { WhereSQL = "age >= 18", IsMandatory = true };
+        mandatory.SaveToDatabase();
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, $"Patient check, mandatory {onPatientIndexTable}");
+        cic.CreateRootContainerIfNotExists();
+        var activator = new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true };
+
+        if (!onPatientIndexTable)
+        {
+            // the set copies today's mandatory filter, as a person adding the catalogue would get it
+            var added = CommandLine.Run(activator, "AddCatalogueToCohortSet", $"CohortAggregateContainer:{cic.RootCohortAggregateContainer_ID}",
+                $"Catalogue:{people.ID}", "null", "null", "true");
+            Assert.That(added.Completed, Is.True, added.ImpossibleReason);
+        }
+        else
+        {
+            var made = CommandLine.Run(activator, "AddPatientIndexTable", $"CohortIdentificationConfiguration:{cic.ID}",
+                $"Catalogue:{people.ID}", "null", "null", "null", "true");
+            Assert.That(made.Completed, Is.True, made.ImpossibleReason);
+            var visits = Import(db, Table("cs_mand_visits", new[] { "chi" }, Rows(1, 4, i => new object[] { P(i) })));
+            var set = AddSet(cic, cic.RootCohortAggregateContainer, visits, 0);
+            var use = cic.GetAllJoinables().Single().AddUser(set);
+            use.JoinType = ExtractionJoinType.Inner;
+            use.SaveToDatabase();
+        }
+
+        // adults (19, 25, 30); a rebuild that copied today's filter as well would drop the 19-year-old
+        AssertRebuildReturnsSamePatients(db, cic, new[] { P(1), P(2), P(4) }, () =>
+        {
+            mandatory.WhereSQL = "age >= 21";
+            mandatory.SaveToDatabase();
+        });
+    }
+
+    [Test]
+    public void ASetUsingTheSecondOfTwoIdentifierColumnsReturnsTheSamePatients()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var births = Import(db, Table("cs_two_ids", new[] { "chi", "mother_chi" },
+            new[] { new object[] { "C1", "M1" }, new object[] { "C2", "M1" }, new object[] { "C3", "M2" } }));
+        var mother = births.GetAllExtractionInformation(ExtractionCategory.Any).Single(e => e.GetRuntimeName() == "mother_chi");
+        mother.IsExtractionIdentifier = true;
+        mother.SaveToDatabase();
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, "Patient check, second identifier");
+        cic.CreateRootContainerIfNotExists();
+        var activator = new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true };
+        var added = CommandLine.Run(activator, "AddCatalogueToCohortSet", $"CohortAggregateContainer:{cic.RootCohortAggregateContainer_ID}",
+            $"Catalogue:{births.ID}", "null", "mother_chi", "false");
+        Assert.That(added.Completed, Is.True, added.ImpossibleReason);
+
+        AssertRebuildReturnsSamePatients(db, cic, new[] { "M1", "M2" });
+    }
+
+    [Test]
+    public void APatientIndexTableWithTwoComputedColumnsReturnsTheSamePatients()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var stays = Import(db, Table("cs_stays", new[] { "chi", "admission_date", "discharge_date" }, new[]
+        {
+            new object[] { P(1), "2020-01-01", "2020-01-10" },
+            new object[] { P(1), "2020-03-01", "2020-03-05" },
+            new object[] { P(2), "2020-02-01", "2020-02-03" }
+        }));
+        var prescribing = Import(db, Table("cs_stays_prescribing", new[] { "chi", "prescribed_date" }, new[]
+        {
+            new object[] { P(1), "2020-02-15" }, // between the first admission and the last discharge
+            new object[] { P(2), "2020-02-10" }, // after the last discharge
+            new object[] { P(3), "2020-02-15" }  // no stays
+        }));
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, "Patient check, computed columns");
+        cic.CreateRootContainerIfNotExists();
+        var pit = new AggregateConfiguration(CatalogueRepository, stays, "Stays") { CountSQL = "count(*) AS stays" };
+        pit.SaveToDatabase();
+        var columns = stays.GetAllExtractionInformation(ExtractionCategory.Any);
+        _ = new AggregateDimension(CatalogueRepository, columns.Single(e => e.GetRuntimeName() == "chi"), pit);
+        foreach (var (column, function, alias) in new[] { ("admission_date", "MIN", "first_in"), ("discharge_date", "MAX", "last_out") })
+        {
+            var ei = columns.Single(e => e.GetRuntimeName() == column);
+            new AggregateDimension(CatalogueRepository, ei, pit) { SelectSQL = $"{function}({ei.SelectSQL})", Alias = alias, GroupBy = false }
+                .SaveToDatabase();
+        }
+
+        cic.EnsureNamingConvention(pit);
+        var joinable = new JoinableCohortAggregateConfiguration(CatalogueRepository, cic, pit);
+        var set = AddSet(cic, cic.RootCohortAggregateContainer, prescribing, 0);
+        var use = joinable.AddUser(set);
+        use.JoinType = ExtractionJoinType.Inner;
+        use.SaveToDatabase();
+        // the filter also uses the count column, so a rebuilt table without it would not run
+        AddFilter(set, "Between stays",
+            $"prescribed_date BETWEEN ix{joinable.ID}.first_in AND ix{joinable.ID}.last_out AND ix{joinable.ID}.stays >= 2");
+
+        // P01 has two stays and a prescription between them; P02 has one stay
+        AssertRebuildReturnsSamePatients(db, cic, new[] { P(1) });
+    }
+
     private void AssertRebuildReturnsSamePatients(DiscoveredDatabase db, CohortIdentificationConfiguration original,
-        string[] expected)
+        string[] expected, Action betweenExportAndRebuild = null)
     {
         var activator = new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet)
         {
@@ -230,19 +337,23 @@ public class CohortScriptPatientTests : DatabaseTests
         {
             new ExecuteCommandExportCohortAsScript(activator, original, outDir).Execute();
             var script = new FileInfo(Path.Join(outDir.FullName, original.Name, "build.script.yaml"));
+            var originalPatients = Patients(db, original);
+            betweenExportAndRebuild?.Invoke();
+
             var rebuiltName = $"{original.Name} (rebuilt)";
             new ExecuteCommandBuildCohortFromScript(activator, script, rebuiltName).Execute();
-
             var rebuilt = CatalogueRepository
                 .GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", rebuiltName).Single();
+            var typed = TypedScript.Run(activator, File.ReadAllText(script.FullName), $"{original.Name} (typed)");
 
-            var originalPatients = Patients(db, original);
             Assert.Multiple(() =>
             {
                 Assert.That(originalPatients, Is.EquivalentTo(expected),
                     "The original cohort should return the patients the fake data was built for.");
                 Assert.That(Patients(db, rebuilt), Is.EquivalentTo(originalPatients),
                     $"The rebuilt cohort should return the same patients as the original. Script:{Environment.NewLine}{File.ReadAllText(script.FullName)}");
+                Assert.That(Patients(db, typed), Is.EquivalentTo(originalPatients),
+                    "The script typed line by line should give the same patients as the original.");
             });
         }
         finally

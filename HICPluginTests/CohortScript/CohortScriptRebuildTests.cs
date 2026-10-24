@@ -169,8 +169,10 @@ internal class CohortScriptRebuildTests : UnitTests
             Assert.That(e.Reason, Is.EqualTo(CohortScriptRefusal.LineRefused), "RDMP refuses the second link to the same project.");
             Assert.That(e.CommandRefusal, Is.EqualTo(CohortScriptRefusal.AlreadyLinked), "The command's own reason should be kept.");
             Assert.That(e.FileLine, Is.EqualTo(5), "The message should name the second link line.");
-            Assert.That(e.Message, Does.Contain("Line 5").And.Contain("left in place"),
-                "The message should name the line and say that the partly built cohort is left.");
+            Assert.That(e.Message, Does.Contain("Line 5").And.Contain("was removed"),
+                "The message should name the line and say that the partly built cohort was removed.");
+            Assert.That(Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name), Is.Empty,
+                "The partly built cohort should be gone.");
         });
     }
 
@@ -334,6 +336,259 @@ internal class CohortScriptRebuildTests : UnitTests
     {
         Assert.That(Check(Script(CreateLine, "Set CohortAggregateContainer:$c2 IsDisabled null")).Select(p => p.Reason),
             Has.Member(CohortScriptRefusal.WrongArgumentKind));
+    }
+
+    // ---- step 4b: clean-up, the delete prompt, renamed objects
+
+    [Test]
+    public void AFailedRebuildLeavesNothingBehind()
+    {
+        var project = WhenIHaveA<Project>();
+        var original = RichCohort(project);
+        var script = new BuildScriptWriter(original, RepositoryLocator).Document();
+        var link = $"LinkCohortToProject CohortIdentificationConfiguration:$cic{original.ID} Project:{project.ID} \"{project.Name}\"";
+        script += $"  - {YamlText.DoubleQuoted(link)}\n";   // a second link to the same project, refused at the end
+        var before = Counts();
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() => Rebuild(script, $"Fails at the end {Guid.NewGuid():N}"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e.CommandRefusal, Is.EqualTo(CohortScriptRefusal.AlreadyLinked));
+            Assert.That(e.Message, Does.Contain("was removed"));
+            Assert.That(Counts(), Is.EqualTo(before), "Every object the rebuild made should be removed again.");
+        });
+    }
+
+    [Test]
+    public void TheCleanUpLeavesOtherCohortsAlone()
+    {
+        var project = WhenIHaveA<Project>();
+        var bystander = RichCohort(project);
+        var bystanderSets = bystander.RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively().Count;
+        // a copy of the bystander that fails on its last line, a second link to the same project
+        var script = new BuildScriptWriter(bystander, RepositoryLocator).Document() +
+                     $"  - {YamlText.DoubleQuoted($"LinkCohortToProject CohortIdentificationConfiguration:$cic{bystander.ID} Project:{project.ID} \"{project.Name}\"")}\n";
+
+        Assert.Throws<CohortScriptRebuildException>(() => Rebuild(script, $"Fails {Guid.NewGuid():N}"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bystander.Exists(), Is.True, "The original cohort should not be touched.");
+            Assert.That(bystander.RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively(), Has.Count.EqualTo(bystanderSets));
+        });
+    }
+
+    [Test]
+    public void AGuiRebuildAsksNothingAndRestoresTheDeleteSetting()
+    {
+        var activator = new PromptRefusingActivator(RepositoryLocator) { InteractiveDeletes = true };
+        var script = Script(CreateLine, SetLine(), "Delete CohortAggregateContainer:$c3");
+
+        RebuildWith(activator, script, $"GUI {Guid.NewGuid():N}");
+        Assert.Throws<CohortScriptRebuildException>(() =>
+            RebuildWith(activator, Script(CreateLine, "Delete CohortAggregateContainer:$c3", "Delete CohortAggregateContainer:$c3"),
+                $"GUI fails {Guid.NewGuid():N}"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(activator.Prompts, Is.Empty, "The rebuild should not ask to confirm the deletes it makes.");
+            Assert.That(activator.InteractiveDeletes, Is.True, "The delete setting should be restored, also after a failure.");
+        });
+    }
+
+    [Test]
+    public void ARenamedCatalogueIsRefusedUnlessTheOptionAcceptsIt()
+    {
+        var script = Script(CreateLine, SetLine("\"Its old name\""));
+        var name = $"Renamed {Guid.NewGuid():N}";
+
+        Assert.That(() => Rebuild(script, name), Throws.TypeOf<CohortScriptProblemsException>());
+
+        RebuildWith(new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true },
+            script, name, acceptRenamed: true);
+        Assert.That(Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name), Has.Length.EqualTo(1),
+            "With the option, the cohort should be built from the renamed catalogue.");
+    }
+
+    [Test]
+    public void ACreateLineThatFailsAfterSavingTheCohortLeavesNothingBehind()
+    {
+        var activator = new FailingActivator(RepositoryLocator) { FailOnPublishOf = typeof(CohortIdentificationConfiguration) };
+        var name = $"Fails in create {Guid.NewGuid():N}";
+        var before = Counts();
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() => RebuildWith(activator, Script(CreateLine, SetLine()), name));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e.Message, Does.Contain("was removed"), "The message should say the cohort RDMP saved was removed.");
+            Assert.That(Counts(), Is.EqualTo(before), "The cohort and its three containers should be gone.");
+        });
+    }
+
+    [Test]
+    public void AFailedRebuildRemovesOnlyItsOwnCohortWhenAnotherSessionUsedTheSameName()
+    {
+        var project = WhenIHaveA<Project>();
+        var name = $"Same name {Guid.NewGuid():N}";
+        CohortIdentificationConfiguration other = null;
+        var activator = new FailingActivator(RepositoryLocator)
+        {
+            // between this rebuild's check and its create line, another session makes a cohort with the same name
+            WhenTheRebuildStarts = () =>
+            {
+                other = new CohortIdentificationConfiguration(Repository, name);
+                other.CreateRootContainerIfNotExists();
+            }
+        };
+        var link = $"LinkCohortToProject CohortIdentificationConfiguration:$cic1 Project:{project.ID} \"{project.Name}\"";
+
+        Assert.Throws<CohortScriptRebuildException>(() => RebuildWith(activator, Script(CreateLine, link, link), name));
+
+        var left = Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name);
+        Assert.That(left.Select(c => c.ID), Is.EqualTo(new[] { other.ID }),
+            "Only this rebuild's cohort should be removed; the other session's cohort of the same name stays.");
+    }
+
+    [Test]
+    public void ARebuildBindsTheCohortItMadeEvenWhenAnotherSessionUsedTheSameName()
+    {
+        var name = $"Same name {Guid.NewGuid():N}";
+        CohortIdentificationConfiguration other = null;
+        var activator = new FailingActivator(RepositoryLocator)
+        {
+            WhenTheRebuildStarts = () =>
+            {
+                other = new CohortIdentificationConfiguration(Repository, name);
+                other.CreateRootContainerIfNotExists();
+            }
+        };
+
+        RebuildWith(activator, Script(CreateLine, SetLine()), name);
+
+        var mine = Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name).Single(c => c.ID != other.ID);
+        Assert.Multiple(() =>
+        {
+            Assert.That(mine.RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively(), Has.Count.EqualTo(1),
+                "The set should be in the cohort this rebuild made.");
+            Assert.That(other.RootCohortAggregateContainer.GetAllAggregateConfigurationsRecursively(), Is.Empty,
+                "The other session's cohort should be untouched.");
+        });
+    }
+
+    [Test]
+    public void TheDeleteSettingIsRestoredWhenTheRebuildCannotStart()
+    {
+        var activator = new FailingActivator(RepositoryLocator) { FailOnGetDelegates = true, InteractiveDeletes = true };
+
+        Assert.That(() => RebuildWith(activator, Script(CreateLine), $"Cannot start {Guid.NewGuid():N}"), Throws.Exception);
+        Assert.That(activator.InteractiveDeletes, Is.True, "The delete setting should be restored even when the rebuild fails to start.");
+    }
+
+    /// <summary>An activator that fails at a chosen point, once, to test the rebuild's failure paths.</summary>
+    private sealed class FailingActivator : ConsoleInputManager
+    {
+        public Type FailOnPublishOf { get; set; }
+        public bool FailOnGetDelegates { get; set; }
+
+        /// <summary>Runs once when the rebuild starts, after its check: another session acting in between.</summary>
+        public Action WhenTheRebuildStarts { get; set; }
+
+        public FailingActivator(Rdmp.Core.Repositories.IRDMPPlatformRepositoryServiceLocator locator)
+            : base(locator, ThrowImmediatelyCheckNotifier.Quiet)
+        {
+            DisallowInput = true;
+        }
+
+        public override void Publish(Rdmp.Core.MapsDirectlyToDatabaseTable.IMapsDirectlyToDatabaseTable databaseEntity)
+        {
+            if (FailOnPublishOf != null && FailOnPublishOf.IsInstanceOfType(databaseEntity))
+            {
+                FailOnPublishOf = null;
+                throw new InvalidOperationException("A failure after the cohort was saved.");
+            }
+
+            base.Publish(databaseEntity);
+        }
+
+        public override List<Rdmp.Core.CommandExecution.CommandInvokerDelegate> GetDelegates()
+        {
+            if (FailOnGetDelegates)
+                throw new InvalidOperationException("A failure while the rebuild starts.");
+            var action = WhenTheRebuildStarts;
+            WhenTheRebuildStarts = null;
+            action?.Invoke();
+            return base.GetDelegates();
+        }
+    }
+
+    // a cohort with a set, a filter tree with a parameter and a source, a patient index table joined by the set,
+    // a forced join, Top X, a cohort parameter and a project link
+    private CohortIdentificationConfiguration RichCohort(Project project)
+    {
+        var cic = new CohortIdentificationConfiguration(Repository, $"Rich {Guid.NewGuid():N}");
+        cic.CreateRootContainerIfNotExists();
+        _ = new ProjectCohortIdentificationConfigurationAssociation(Repository, project, cic);
+        new AnyTableSqlParameter(Repository, cic, "DECLARE @start AS date") { Value = "'2015-01-01'" }.SaveToDatabase();
+
+        var pit = new Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration(Repository, _catalogue, "PIT") { CountSQL = null };
+        pit.SaveToDatabase();
+        _ = new Rdmp.Core.Curation.Data.Aggregation.AggregateDimension(Repository, _identifier, pit);
+        cic.EnsureNamingConvention(pit);
+        var joinable = new Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfiguration(Repository, cic, pit);
+
+        var set = new Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration(Repository, _catalogue, "Set") { CountSQL = null };
+        set.SaveToDatabase();
+        _ = new Rdmp.Core.Curation.Data.Aggregation.AggregateDimension(Repository, _identifier, set);
+        cic.EnsureNamingConvention(set);
+        cic.RootCohortAggregateContainer.AddChild(set, 0);
+        joinable.AddUser(set);
+        Repository.AggregateForcedJoinManager.CreateLinkBetween(set, WhenIHaveA<TableInfo>());
+        new Rdmp.Core.Curation.Data.AggregateTopX(Repository, set, 10).SaveToDatabase();
+        new AnyTableSqlParameter(Repository, set, "DECLARE @window AS int") { Value = "90" }.SaveToDatabase();
+        var fc = new Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer(Repository, FilterContainerOperation.AND);
+        set.RootFilterContainer_ID = fc.ID;
+        set.SaveToDatabase();
+        var filter = new Rdmp.Core.Curation.Data.Aggregation.AggregateFilter(Repository, "F", fc) { WhereSQL = "x = @code" };
+        filter.SaveToDatabase();
+        var parameter = filter.GetFilterFactory().CreateNewParameter(filter, "DECLARE @code AS varchar(5)");
+        parameter.Value = "'A'";
+        parameter.SaveToDatabase();
+        var child = new Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer(Repository, FilterContainerOperation.OR);
+        fc.AddChild(child);
+        new Rdmp.Core.Curation.Data.Aggregation.AggregateFilter(Repository, "G", child) { WhereSQL = "y = 1" }.SaveToDatabase();
+        return cic;
+    }
+
+    private Dictionary<string, int> Counts() => new()
+    {
+        ["cohorts"] = Repository.GetAllObjects<CohortIdentificationConfiguration>().Length,
+        ["containers"] = Repository.GetAllObjects<CohortAggregateContainer>().Length,
+        ["sets"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration>().Length,
+        ["columns"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateDimension>().Length,
+        ["filter containers"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer>().Length,
+        ["filters"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilter>().Length,
+        ["filter parameters"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterParameter>().Length,
+        ["other parameters"] = Repository.GetAllObjects<AnyTableSqlParameter>().Length,
+        ["patient index tables"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfiguration>().Length,
+        ["join uses"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfigurationUse>().Length,
+        ["top x"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.AggregateTopX>().Length,
+        ["project links"] = Repository.GetAllObjects<ProjectCohortIdentificationConfigurationAssociation>().Length
+    };
+
+    private void RebuildWith(Rdmp.Core.CommandExecution.IBasicActivateItems activator, string text, string name, bool acceptRenamed = false)
+    {
+        var file = new FileInfo(Path.Join(Path.GetTempPath(), $"rdmp-cohortscript-{Guid.NewGuid()}.yaml"));
+        File.WriteAllText(file.FullName, text);
+        try
+        {
+            new ExecuteCommandBuildCohortFromScript(activator, file, name, acceptRenamed).Execute();
+        }
+        finally
+        {
+            file.Delete();
+        }
     }
 
     // ---- helpers

@@ -65,11 +65,19 @@ internal sealed class CohortScriptRunner
     private readonly Dictionary<string, Type> _commandTypes;
     private IMapsDirectlyToDatabaseTable _deleting;
 
+    // every object this run's lines saved, in order, from the repositories' Inserting events. Each RDMP session has
+    // its own repository objects, so another session's work never appears here: this is what the run owns.
+    private readonly List<IMapsDirectlyToDatabaseTable> _made = new();
+    private readonly List<IMapsDirectlyToDatabaseTable> _madeByLine = new();
+
     /// <summary>The cohort the first line made, once it has run.</summary>
     public CohortIdentificationConfiguration Cohort { get; private set; }
 
-    public CohortScriptRunner(IBasicActivateItems activator, string newCohortName)
+    private readonly bool _acceptRenamed;
+
+    public CohortScriptRunner(IBasicActivateItems activator, string newCohortName, bool acceptRenamed = false)
     {
+        _acceptRenamed = acceptRenamed;
         _activator = activator;
         _repository = activator.RepositoryLocator.CatalogueRepository;
         _newCohortName = newCohortName;
@@ -85,10 +93,31 @@ internal sealed class CohortScriptRunner
     public void Run(IEnumerable<ScriptFileLine> lines)
     {
         var first = true;
-        foreach (var line in lines)
+        ScriptFileLine current = null;
+        try
         {
-            RunLine(line, first);
-            first = false;
+            foreach (var line in lines)
+            {
+                current = line;
+                RunLine(line, first);
+                first = false;
+            }
+        }
+        catch (Exception e)
+        {
+            // whatever went wrong, the partly built cohort is removed, so a failed rebuild leaves nothing behind
+            var stopped = e as CohortScriptRebuildException ??
+                          Stop(current, CohortScriptRefusal.LineFailed, $"{current?.Parsed?.Command} failed: {e.Message}", e);
+
+            // the create line may fail after RDMP saved the cohort but before the runner bound it; the cohort this
+            // run saved is known from the Inserting events, never looked up by name, which another session may share
+            Cohort ??= _made.OfType<CohortIdentificationConfiguration>().FirstOrDefault();
+            var outcome = Cohort == null && _made.Count == 0
+                ? "Nothing was built."
+                : new CohortScriptCleanup(_activator.RepositoryLocator).Remove(Cohort, _made);
+            Cohort = null;
+            throw new CohortScriptRebuildException(stopped.FileLine, stopped.Reason, $"{stopped.Message} {outcome}",
+                stopped.InnerException, stopped.CommandRefusal);
         }
     }
 
@@ -102,15 +131,40 @@ internal sealed class CohortScriptRunner
 
         var before = Before(line, arguments);
         _deleting = line.Parsed.Command == "Delete" ? GetByTypedId(arguments[0]) : null;
-        var command = Execute(line, definition, arguments);
+        _madeByLine.Clear();
+        IAtomicCommand command;
+        var repositories = new IRepository[] { _repository, _activator.RepositoryLocator.DataExportRepository }
+            .Where(r => r != null).Distinct().ToArray();
+        foreach (var repository in repositories)
+            repository.Inserting += Recorded;
+        try
+        {
+            command = Execute(line, definition, arguments);
+        }
+        finally
+        {
+            foreach (var repository in repositories)
+                repository.Inserting -= Recorded;
+        }
+
         Bind(line, arguments, command, before);
         Verify(line, arguments);
+    }
+
+    private void Recorded(object sender, IMapsDirectlyToDatabaseTableEventArgs e)
+    {
+        _made.Add(e.Object);
+        _madeByLine.Add(e.Object);
     }
 
     // handles become ids; {$j} markers become ids in SQL arguments only; text stays exactly as written
     private string Resolve(ScriptFileLine line, ScriptCommandDefinition definition, int index, ScriptArgument argument)
     {
         if (argument.IsNull)
+            return null;
+
+        // with the option to accept renamed objects, the commands skip their own name check; the check warned already
+        if (_acceptRenamed && definition.Reference?.NameArgument == index)
             return null;
 
         var kind = definition.ArgumentSpecs[index].Kind;
@@ -245,7 +299,7 @@ internal sealed class CohortScriptRunner
         switch (line.Parsed.Command)
         {
             case "CreateNewCohortIdentificationConfiguration":
-                Cohort = _repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", arguments[0]).SingleOrDefault()
+                Cohort = _madeByLine.OfType<CohortIdentificationConfiguration>().SingleOrDefault()
                          ?? throw Stop(line, CohortScriptRefusal.LineHadNoEffect, $"No cohort called \"{arguments[0]}\" was made.");
                 var root = Cohort.RootCohortAggregateContainer;
                 var automatic = root?.GetSubContainers().OrderBy(c => c.Order).ToArray() ?? Array.Empty<CohortAggregateContainer>();
@@ -427,13 +481,8 @@ internal sealed class CohortScriptRunner
         return _repository.GetObjectByID(ObjectTypes[typeName], int.Parse(idText));
     }
 
-    private CohortScriptRebuildException Stop(ScriptFileLine line, CohortScriptRefusal reason, string message, Exception inner = null,
-        CohortScriptRefusal? commandRefusal = null)
-    {
-        var left = Cohort == null
-            ? "Nothing was built."
-            : $"The partly built cohort {Cohort.ID} \"{Cohort.Name}\" is left in place; delete it before trying again.";
-        return new CohortScriptRebuildException(line.FileLine, reason,
-            $"Line {line.FileLine} of the build script: {message} The rebuild stopped here. {left}", inner, commandRefusal);
-    }
+    private static CohortScriptRebuildException Stop(ScriptFileLine line, CohortScriptRefusal reason, string message,
+        Exception inner = null, CohortScriptRefusal? commandRefusal = null) =>
+        new(line?.FileLine ?? 0, reason,
+            $"Line {line?.FileLine} of the build script: {message} The rebuild stopped here.", inner, commandRefusal);
 }

@@ -12,7 +12,11 @@ using Rdmp.Core.CommandExecution;
 using Rdmp.Core.CommandExecution.AtomicCommands;
 using Rdmp.Core.CommandLine.Interactive;
 using Rdmp.Core.CommandLine.Interactive.Picking;
+using Rdmp.Core.Curation.Data.Aggregation;
+using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.Curation.Data.Cohort.Joinables;
 using Rdmp.Core.MapsDirectlyToDatabaseTable;
+using RdmpCohortScript;
 using Rdmp.Core.Repositories;
 using Rdmp.Core.ReusableLibraryCode.Checks;
 
@@ -58,6 +62,98 @@ internal static class CommandLine
         };
         invoker.ExecuteCommand(type, new CommandLineObjectPicker(line.Skip(1).ToArray(), activator));
         return (completed, reason, command);
+    }
+}
+
+/// <summary>
+/// Runs a build script the way a person types it: each line through RDMP's own command-line reader, with every
+/// handle replaced by the id of the object an earlier line made. The person finds those objects by looking at what
+/// appeared after each line, so this helper does the same. It hands RDMP the arguments already split, so the limits
+/// of typing in a shell (trimmed values, no quote escape) are not exercised here; the format document states them.
+/// </summary>
+internal static class TypedScript
+{
+    public static CohortIdentificationConfiguration Run(IBasicActivateItems activator, string document, string newName)
+    {
+        var repository = activator.RepositoryLocator.CatalogueRepository;
+        var problems = new List<CohortScriptProblem>();
+        var lines = CohortScriptReader.Read(document, problems).Parsed().ToArray();
+        if (problems.Count > 0)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
+
+        var ids = new Dictionary<string, int>(StringComparer.Ordinal);
+        CohortIdentificationConfiguration cic = null;
+        foreach (var line in lines)
+        {
+            var definition = CohortScriptFormat.Commands[line.Parsed.Command];
+            var typed = new List<string> { line.Parsed.Command };
+            for (var i = 0; i < line.Parsed.Arguments.Count; i++)
+            {
+                var argument = line.Parsed.Arguments[i];
+                if (argument.IsNull)
+                    typed.Add("null");
+                else if (definition.ArgumentSpecs[i].Kind == ArgumentKind.Handle &&
+                         CohortScriptFormat.TrySplitTyped(argument.Text, out var typeName, out var handle))
+                    typed.Add($"{typeName}:{ids[handle]}");
+                else
+                    typed.Add(CohortScriptFormat.SqlMarker.Replace(argument.Text, m => ids[m.Groups["handle"].Value].ToString()));
+            }
+
+            if (cic == null)
+                typed[1] = newName;
+
+            var before = Snapshot(repository);
+            var result = CommandLine.Run(activator, typed.ToArray());
+            if (!result.Completed)
+                throw new InvalidOperationException($"Typed line {line.FileLine} did not run: {result.ImpossibleReason}");
+
+            if (cic == null)
+            {
+                cic = repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", newName).Single();
+                var root = cic.RootCohortAggregateContainer;
+                var automatic = root.GetSubContainers().OrderBy(c => c.Order).ToArray();
+                ids[line.Parsed.Handles[0]] = cic.ID;
+                ids[line.Parsed.Handles[1]] = root.ID;
+                ids[line.Parsed.Handles[2]] = automatic[0].ID;
+                ids[line.Parsed.Handles[3]] = automatic[1].ID;
+                continue;
+            }
+
+            var made = New(repository, before);
+            foreach (var handle in line.Parsed.Handles)
+                ids[handle] = CohortScriptFormat.RoleOf(handle) switch
+                {
+                    HandleRole.Container => made.Containers.Single(),
+                    HandleRole.Set => made.Sets.Single(),
+                    HandleRole.Joinable => made.Joinables.Single(),
+                    HandleRole.FilterContainer => made.FilterContainers.Single(),
+                    HandleRole.Filter => made.Filters.Single(),
+                    HandleRole.Dimension => made.Dimensions.Single(id =>
+                        string.Equals(repository.GetObjectByID<AggregateDimension>(id).ExtractionInformation.GetRuntimeName(),
+                            CohortScriptFormat.SplitDimension(handle).Column, StringComparison.OrdinalIgnoreCase)),
+                    _ => throw new InvalidOperationException($"Unexpected handle {handle}")
+                };
+        }
+
+        return cic;
+    }
+
+    private sealed record Ids(int[] Containers, int[] Sets, int[] Joinables, int[] FilterContainers, int[] Filters, int[] Dimensions);
+
+    private static Ids Snapshot(ICatalogueRepository r) => new(
+        r.GetAllObjects<CohortAggregateContainer>().Select(o => o.ID).ToArray(),
+        r.GetAllObjects<AggregateConfiguration>().Select(o => o.ID).ToArray(),
+        r.GetAllObjects<JoinableCohortAggregateConfiguration>().Select(o => o.ID).ToArray(),
+        r.GetAllObjects<AggregateFilterContainer>().Select(o => o.ID).ToArray(),
+        r.GetAllObjects<AggregateFilter>().Select(o => o.ID).ToArray(),
+        r.GetAllObjects<AggregateDimension>().Select(o => o.ID).ToArray());
+
+    private static Ids New(ICatalogueRepository r, Ids before)
+    {
+        var after = Snapshot(r);
+        return new Ids(after.Containers.Except(before.Containers).ToArray(), after.Sets.Except(before.Sets).ToArray(),
+            after.Joinables.Except(before.Joinables).ToArray(), after.FilterContainers.Except(before.FilterContainers).ToArray(),
+            after.Filters.Except(before.Filters).ToArray(), after.Dimensions.Except(before.Dimensions).ToArray());
     }
 }
 

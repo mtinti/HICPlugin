@@ -22,10 +22,17 @@ internal sealed class CohortScriptChecker
     private readonly Dictionary<string, HandleRole> _created = new(StringComparer.Ordinal);
     private readonly HashSet<int> _linkedProjects = new();
 
-    public CohortScriptChecker(IRDMPPlatformRepositoryServiceLocator locator, List<CohortScriptProblem> problems)
+    private readonly bool _acceptRenamed;
+
+    /// <summary>Renamed objects reported instead of refused, when the option to accept them is on.</summary>
+    public List<CohortScriptProblem> Warnings { get; } = new();
+
+    public CohortScriptChecker(IRDMPPlatformRepositoryServiceLocator locator, List<CohortScriptProblem> problems,
+        bool acceptRenamed = false)
     {
         _locator = locator;
         _problems = problems;
+        _acceptRenamed = acceptRenamed;
     }
 
     public void Check(IReadOnlyList<ScriptFileLine> lines, string newCohortName)
@@ -190,7 +197,10 @@ internal sealed class CohortScriptChecker
 
         var current = ((INamed)existing).Name;
         var mismatch = ExistingObjectName.Mismatch(reference.TypeName, existing, current, nameArgument.Text);
-        if (mismatch != null)
+        if (mismatch != null && _acceptRenamed)
+            Warnings.Add(new CohortScriptProblem(line.FileLine, CohortScriptRefusal.NameMismatch,
+                $"{reference.TypeName} {id} was renamed from \"{nameArgument.Text}\" to \"{current}\"; the rebuild uses it, as asked."));
+        else if (mismatch != null)
             Problem(line.FileLine, CohortScriptRefusal.NameMismatch, mismatch);
 
         if (existing is Project project)
