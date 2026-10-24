@@ -97,7 +97,7 @@ internal partial class CohortScriptWriterTests : UnitTests
     {
         AddSet(_root, sql);
 
-        var filterLine = Commands(Writer().Document()).Select(ScriptLine.Parse).Single(l => l.Command == "CreateNewFilter");
+        var filterLine = Commands(Writer().Document()).Select(ScriptLine.Parse).Single(l => l.Command == "AddCohortFilter");
 
         Assert.That(filterLine.Arguments[2].Text, Is.EqualTo(sql), "The filter's SQL should come back unchanged.");
     }
@@ -110,7 +110,7 @@ internal partial class CohortScriptWriterTests : UnitTests
         set.SaveToDatabase();
 
         var having = Commands(Writer().Document()).Select(ScriptLine.Parse)
-            .Single(l => l.Command == "Set" && l.Arguments[1].Text == "HavingSQL");
+            .Single(l => l.Command == "SetText" && l.Arguments[1].Text == "HavingSQL");
 
         Assert.That(having.Arguments[2].Text, Is.EqualTo(set.HavingSQL),
             "HAVING SQL should keep its new lines, so the comment does not swallow the next line.");
@@ -169,7 +169,7 @@ internal partial class CohortScriptWriterTests : UnitTests
         Assert.Multiple(() =>
         {
             Assert.That(Index($"Set AggregateConfiguration:$a{a.ID} Order"), Is.GreaterThan(Index($"AddCatalogueToCohortSet CohortAggregateContainer:$c{_root.ID}")));
-            Assert.That(Index($"Set AggregateConfiguration:$a{b.ID} Order"), Is.GreaterThan(Index($"CreateNewFilter AggregateFilterContainer:$fc{b.RootFilterContainer_ID}")),
+            Assert.That(Index($"Set AggregateConfiguration:$a{b.ID} Order"), Is.GreaterThan(Index($"AddCohortFilter AggregateFilterContainer:$fc{b.RootFilterContainer_ID}")),
                 "Order lines should come after every child of the container exists.");
             Assert.That(lines.TakeLast(2), Is.EquivalentTo(new[]
             {
@@ -223,11 +223,11 @@ internal partial class CohortScriptWriterTests : UnitTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Arg(l => l.Command == "CreateNewFilter", 2),
+            Assert.That(Arg(l => l.Command == "AddCohortFilter", 2),
                 Is.EqualTo($"date >= ix{{$j{joinable.ID}}}.admission_date AND other_ix{joinable.ID} = 1"),
                 "Only the whole word ix<id> should be marked.");
-            Assert.That(Arg(l => l.Command == "Set" && l.Arguments[1].Text == "HavingSQL", 2), Does.Contain($"ix{{$j{joinable.ID}}}."));
-            Assert.That(Arg(l => l.Command == "Set" && l.Arguments[1].Text == "SelectSQL" &&
+            Assert.That(Arg(l => l.Command == "SetText" && l.Arguments[1].Text == "HavingSQL", 2), Does.Contain($"ix{{$j{joinable.ID}}}."));
+            Assert.That(Arg(l => l.Command == "SetText" && l.Arguments[1].Text == "SelectSQL" &&
                                  l.Arguments[0].Text.StartsWith($"AggregateDimension:$a{set.ID}.", StringComparison.Ordinal), 2),
                 Does.Contain($"ix{{$j{joinable.ID}}}."));
         });
@@ -254,14 +254,14 @@ internal partial class CohortScriptWriterTests : UnitTests
     // ---- refusals
 
     [Test]
-    public void ASetWithACountColumnIsRefused()
+    public void ASetsCountColumnIsWrittenBecauseRdmpUsesItInTheQuery()
     {
         var set = AddSet(_root, null);
         set.CountSQL = "count(*)";
         set.SaveToDatabase();
 
-        Assert.That(() => Writer().Lines(),
-            Throws.TypeOf<CohortScriptExportException>().With.Property(nameof(CohortScriptExportException.Reason)).EqualTo(CohortScriptRefusal.CountColumnOnSet));
+        Assert.That(Commands(Writer().Document()), Has.One.EqualTo($"SetText AggregateConfiguration:$a{set.ID} CountSQL \"count(*)\""),
+            "RDMP adds a count column and a GROUP BY to any set that has one, so the rebuilt set needs it too.");
     }
 
     [Test]

@@ -189,6 +189,34 @@ public class CohortScriptPatientTests : DatabaseTests
         AssertRebuildReturnsSamePatients(db, cic, new[] { P(2), P(6) });
     }
 
+    [Test]
+    public void RebuiltCohortKeepsTheCountColumnsThatChangeWhatExceptCompares()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+
+        // with a count column each set returns (patient, count), so EXCEPT removes a patient only when both match
+        var visits = Table("cs_count_visits", new[] { "chi" },
+            new[] { P(1), P(1), P(2) }.Select(p => new object[] { p }));
+        var calls = Table("cs_count_calls", new[] { "chi" },
+            new[] { P(1), P(2) }.Select(p => new object[] { p }));
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, "Patient check, count columns");
+        cic.CreateRootContainerIfNotExists();
+        var root = cic.RootCohortAggregateContainer;
+        root.Operation = SetOperation.EXCEPT;
+        root.SaveToDatabase();
+
+        foreach (var (table, order) in new[] { (visits, 0), (calls, 1) })
+        {
+            var set = AddSet(cic, root, Import(db, table), order);
+            set.CountSQL = "count(*)";
+            set.SaveToDatabase();
+        }
+
+        // P01 has 2 visits and 1 call, so (P01, 2) is not removed; P02 has 1 of each and is removed
+        AssertRebuildReturnsSamePatients(db, cic, new[] { P(1) });
+    }
+
     private void AssertRebuildReturnsSamePatients(DiscoveredDatabase db, CohortIdentificationConfiguration original,
         string[] expected)
     {

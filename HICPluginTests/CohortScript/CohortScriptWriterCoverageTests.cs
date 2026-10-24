@@ -132,7 +132,7 @@ internal partial class CohortScriptWriterTests
         _cic.Folder = "\\studies\\diabetes";
         _cic.SaveToDatabase();
 
-        var lines = Parsed().Where(l => l.Command == "Set" && l.Arguments[0].Text == $"CohortIdentificationConfiguration:$cic{_cic.ID}")
+        var lines = Parsed().Where(l => l.Command == "SetText" && l.Arguments[0].Text == $"CohortIdentificationConfiguration:$cic{_cic.ID}")
             .ToDictionary(l => l.Arguments[1].Text, l => l.Arguments[2].Text);
 
         Assert.That(lines, Is.EquivalentTo(new Dictionary<string, string>
@@ -215,7 +215,7 @@ internal partial class CohortScriptWriterTests
         date.GroupBy = false;
         date.SaveToDatabase();
 
-        var dimensionLines = Parsed().Where(l => l.Command == "Set" && l.Arguments[0].Text.StartsWith("AggregateDimension:", StringComparison.Ordinal))
+        var dimensionLines = Parsed().Where(l => l.Command is "Set" or "SetText" && l.Arguments[0].Text.StartsWith("AggregateDimension:", StringComparison.Ordinal))
             .Select(l => (l.Arguments[0].Text, l.Arguments[1].Text, l.Arguments[2].Text)).ToArray();
         var dateTarget = $"AggregateDimension:$a{table.ID}.{_other.GetRuntimeName()}";
 
@@ -301,7 +301,7 @@ internal partial class CohortScriptWriterTests
                   $"/* ix{id} /* nested */ ix{id} */ AND other = 'ix2147483648' AND ix2147483648 = 1";
         AddSet(_root, sql);
 
-        var marked = Parsed().Single(l => l.Command == "CreateNewFilter").Arguments[2].Text;
+        var marked = Parsed().Single(l => l.Command == "AddCohortFilter").Arguments[2].Text;
 
         Assert.That(marked, Is.EqualTo(
             $"d >= ix{{$j{id}}}.admission_date AND code = 'ix{id}.column' AND [ix{id}] = 1 -- ix{id} in a comment\n" +
@@ -318,7 +318,7 @@ internal partial class CohortScriptWriterTests
                   $"AND ix{id} .e > 0 AND ix{id} = 2";
         AddSet(_root, sql);
 
-        var marked = Parsed().Single(l => l.Command == "CreateNewFilter").Arguments[2].Text;
+        var marked = Parsed().Single(l => l.Command == "AddCohortFilter").Arguments[2].Text;
 
         Assert.That(marked, Is.EqualTo(
             $"source.ix{id} = 1 AND ix{{$j{id}}}.a > 0 AND [ix{{$j{id}}}].b > 0 AND \"ix{{$j{id}}}\".c > 0 AND IX{{$j{id}}}.d > 0 " +

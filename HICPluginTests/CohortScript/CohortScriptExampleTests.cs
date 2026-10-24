@@ -13,6 +13,7 @@ using RdmpCohortScript;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 using YamlDotNet.Serialization;
+using Tests.Common;
 
 namespace HICPluginTests;
 
@@ -20,7 +21,7 @@ namespace HICPluginTests;
 /// The example scripts in CohortScript/Examples read with the plugin's own parser, so the examples, the format
 /// document and the parser cannot drift apart.
 /// </summary>
-public class CohortScriptExampleTests
+internal class CohortScriptExampleTests : UnitTests
 {
     // command name -> (arguments, handles); null handles means "any number", for the lines that bind columns
     private static readonly Dictionary<string, (int Arguments, int? Handles)> CommandTable = new()
@@ -35,7 +36,8 @@ public class CohortScriptExampleTests
         ["AddForcedJoin"] = (3, 0),
         ["AddNewFilterContainer"] = (1, 1),
         ["AddChildFilterContainer"] = (1, 1),
-        ["CreateNewFilter"] = (3, 1),
+        ["AddCohortFilter"] = (3, 1),
+        ["SetText"] = (3, 0),
         ["SetFilterSource"] = (3, 0),
         ["RenameCohortSet"] = (2, 0),
         ["SetTopX"] = (4, 0),
@@ -72,6 +74,19 @@ public class CohortScriptExampleTests
                                   3 + (line.Arguments[4].IsNull ? 0 : line.Arguments[4].Text.Split(',').Length);
             Assert.That(line.Handles, Has.Count.EqualTo(expectedHandles), $"Wrong number of handles: {text1}");
         }
+    }
+
+    [TestCaseSource(nameof(Examples))]
+    public void TheExamplePassesTheCheckExceptForItsMadeUpIds(string file)
+    {
+        var problems = new List<CohortScriptProblem>();
+        var lines = CohortScriptReader.Read(
+            File.ReadAllText(Path.Join(TestContext.CurrentContext.TestDirectory, "CohortScript", "Examples", file)), problems);
+        new CohortScriptChecker(RepositoryLocator, problems).Check(lines, $"Example {Guid.NewGuid():N}");
+
+        // the examples name catalogues, tables, projects and filters that this test platform does not have
+        Assert.That(problems.Where(p => p.Reason != CohortScriptRefusal.ReferenceNotFound), Is.Empty,
+            "The example should follow every rule of the format.");
     }
 
     [TestCaseSource(nameof(Examples))]

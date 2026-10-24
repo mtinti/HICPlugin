@@ -1,0 +1,373 @@
+// Copyright (c) The University of Dundee 2024-2024
+// This file is part of the Research Data Management Platform (RDMP).
+// RDMP is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+// RDMP is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+// You should have received a copy of the GNU General Public License along with RDMP. If not, see <https://www.gnu.org/licenses/>.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using NUnit.Framework;
+using Rdmp.Core.CommandLine.Interactive;
+using Rdmp.Core.Curation.Data;
+using Rdmp.Core.Curation.Data.Cohort;
+using Rdmp.Core.DataExport.Data;
+using Rdmp.Core.ReusableLibraryCode.Checks;
+using RdmpCohortScript;
+using Tests.Common;
+
+namespace HICPluginTests;
+
+/// <summary>
+/// The rebuild of a format 1 script: the checks it runs before building anything, and how it stops at a line that
+/// fails. Each check has a script that breaks only that rule.
+/// </summary>
+internal class CohortScriptRebuildTests : UnitTests
+{
+    private Catalogue _catalogue;
+    private ExtractionInformation _identifier;
+    private string _column;
+
+    [SetUp]
+    public void MakeCatalogue()
+    {
+        var throwaway = WhenIHaveA(Repository, out _, out var first);
+        _catalogue = throwaway.Catalogue;
+        _catalogue.Name = $"Rebuild catalogue {Guid.NewGuid():N}";
+        _catalogue.SaveToDatabase();
+        first.IsExtractionIdentifier = true;
+        first.SaveToDatabase();
+        _identifier = first;
+        _column = first.GetRuntimeName();
+        throwaway.DeleteInDatabase();
+    }
+
+    private string CreateLine => "CreateNewCohortIdentificationConfiguration \"Rebuild test\" => $cic1 $c1 $c2 $c3";
+
+    private string SetLine(string catalogueName = null, string id = null) =>
+        $"AddCatalogueToCohortSet CohortAggregateContainer:$c2 Catalogue:{id ?? _catalogue.ID.ToString()} {catalogueName ?? $"\"{_catalogue.Name}\""} \"{_column}\" false => $a1 $a1.{_column}";
+
+    // ---- a script that is right
+
+    [Test]
+    public void AGoodScriptBuildsTheCohortAndBindsEachHandleToWhatItsLineMade()
+    {
+        var name = $"Built {Guid.NewGuid():N}";
+        Rebuild(Script(CreateLine, SetLine(), "SetText CohortAggregateContainer:$c2 Name \"Inclusion\"", "Delete CohortAggregateContainer:$c3"), name);
+
+        var cic = Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name).Single();
+        var children = cic.RootCohortAggregateContainer.GetSubContainers();
+        Assert.Multiple(() =>
+        {
+            Assert.That(children.Select(c => c.Name), Is.EqualTo(new[] { "Inclusion" }),
+                "The first automatic container should be renamed and the second deleted.");
+            Assert.That(children.Single().GetAggregateConfigurations().Single().Catalogue.ID, Is.EqualTo(_catalogue.ID),
+                "The set should be in the container its line named.");
+        });
+    }
+
+    // ---- the file
+
+    [Test]
+    public void AScriptFromTheJuneExportIsRefusedWithAnExplanation()
+    {
+        var problems = Check("Commands:\n  - CreateNewCohortIdentificationConfiguration \"Old\" => $c1\n");
+
+        Assert.That(problems.Select(p => p.Reason), Has.Member(CohortScriptRefusal.NotFormat1));
+        Assert.That(problems.Single(p => p.Reason == CohortScriptRefusal.NotFormat1).Message, Does.Contain("June export"));
+    }
+
+    [Test]
+    public void AValueThatIsNotDoubleQuotedIsRefused()
+    {
+        var problems = Check($"cohort-script-format: \"1\"\nCommands:\n  - {CreateLine}\n");
+
+        Assert.That(problems.Select(p => p.Reason), Has.Member(CohortScriptRefusal.NotStrictYaml));
+    }
+
+    // ---- one test per check
+
+    [TestCase("Frobnicate CohortAggregateContainer:$c1", CohortScriptRefusal.UnknownCommand, TestName = "AnUnknownCommandIsRefused")]
+    [TestCase("Set CohortAggregateContainer:$c1 Operation", CohortScriptRefusal.WrongArgumentCount, TestName = "AWrongNumberOfArgumentsIsRefused")]
+    [TestCase("AddCohortSubContainer CohortAggregateContainer:$c1", CohortScriptRefusal.WrongHandleCount, TestName = "AMissingHandleIsRefused")]
+    [TestCase("AddCohortSubContainer CohortAggregateContainer:$c1 => $a9", CohortScriptRefusal.BadHandle, TestName = "AHandleOfTheWrongRoleIsRefused")]
+    [TestCase("AddCohortSubContainer CohortAggregateContainer:$c1 => $c2", CohortScriptRefusal.HandleCreatedTwice, TestName = "AHandleCreatedTwiceIsRefused")]
+    [TestCase("Set AggregateConfiguration:$a9 Order \"0\"", CohortScriptRefusal.HandleUsedBeforeCreated, TestName = "AHandleUsedBeforeItIsCreatedIsRefused")]
+    [TestCase("Set CohortAggregateContainer:12 Operation UNION", CohortScriptRefusal.IdInsteadOfHandle, TestName = "SetOnAnExistingObjectByIdIsRefused")]
+    [TestCase("Delete CohortAggregateContainer:12", CohortScriptRefusal.IdInsteadOfHandle, TestName = "DeleteOfAnExistingObjectByIdIsRefused")]
+    [TestCase("Set CohortAggregateContainer:$c1 ID \"7\"", CohortScriptRefusal.PropertyNotAllowed, TestName = "SetOnAPropertyTheFormatDoesNotAllowIsRefused")]
+    [TestCase("CreateNewCohortIdentificationConfiguration \"Second\" => $cic2 $c4 $c5 $c6", CohortScriptRefusal.CreateLineNotFirst, TestName = "ASecondCreateLineIsRefused")]
+    [TestCase("AddCohortFilter AggregateFilterContainer:$fc1 \"F\" \"x = ix{$j9}.y\" => $f1", CohortScriptRefusal.HandleUsedBeforeCreated, TestName = "AMarkerForAPatientIndexTableNotYetMadeIsRefused")]
+    public void ALineThatBreaksARuleIsRefused(string line, CohortScriptRefusal expected)
+    {
+        var problems = Check(Script(CreateLine, line));
+
+        Assert.That(problems.Select(p => p.Reason), Has.Member(expected), string.Join(Environment.NewLine, problems));
+    }
+
+    [Test]
+    public void AReferenceWithoutANameIsRefused()
+    {
+        Assert.That(Check(Script(CreateLine, SetLine("null"))).Select(p => p.Reason), Has.Member(CohortScriptRefusal.MissingName));
+    }
+
+    [Test]
+    public void AReferenceToAnObjectThatDoesNotExistIsRefused()
+    {
+        Assert.That(Check(Script(CreateLine, SetLine(id: "987654"))).Select(p => p.Reason), Has.Member(CohortScriptRefusal.ReferenceNotFound));
+    }
+
+    [Test]
+    public void AReferenceWhoseNameDiffersIsRefused()
+    {
+        Assert.That(Check(Script(CreateLine, SetLine("\"Another name\""))).Select(p => p.Reason), Has.Member(CohortScriptRefusal.NameMismatch));
+    }
+
+    [Test]
+    public void ACohortNameAlreadyTakenIsRefused()
+    {
+        var taken = new CohortIdentificationConfiguration(Repository, $"Taken {Guid.NewGuid():N}");
+
+        Assert.That(Check(Script(CreateLine), taken.Name).Select(p => p.Reason), Has.Member(CohortScriptRefusal.CohortNameTaken));
+    }
+
+    [Test]
+    public void EveryProblemIsListedWithItsLineInTheFile()
+    {
+        // the header takes lines 1 and 2, so command n is on file line n + 2
+        var problems = Check(Script(CreateLine, "Frobnicate x", SetLine("\"Another name\"")));
+
+        Assert.That(problems.Select(p => (p.FileLine, p.Reason)), Is.SupersetOf(new[]
+        {
+            (4, CohortScriptRefusal.UnknownCommand), (5, CohortScriptRefusal.NameMismatch)
+        }));
+    }
+
+    [Test]
+    public void NothingIsBuiltWhenTheCheckFindsAProblem()
+    {
+        var name = $"Not built {Guid.NewGuid():N}";
+
+        Assert.That(() => Rebuild(Script(CreateLine, "Frobnicate x"), name), Throws.TypeOf<CohortScriptProblemsException>());
+        Assert.That(Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name), Is.Empty);
+    }
+
+    // ---- a line that fails while the rebuild runs
+
+    [Test]
+    public void ALineRdmpRefusesStopsTheRebuildAndNamesTheLine()
+    {
+        var project = WhenIHaveA<Project>();
+        var link = $"LinkCohortToProject CohortIdentificationConfiguration:$cic1 Project:{project.ID} \"{project.Name}\"";
+        var name = $"Stops {Guid.NewGuid():N}";
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() => Rebuild(Script(CreateLine, link, link), name));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e.Reason, Is.EqualTo(CohortScriptRefusal.LineRefused), "RDMP refuses the second link to the same project.");
+            Assert.That(e.CommandRefusal, Is.EqualTo(CohortScriptRefusal.AlreadyLinked), "The command's own reason should be kept.");
+            Assert.That(e.FileLine, Is.EqualTo(5), "The message should name the second link line.");
+            Assert.That(e.Message, Does.Contain("Line 5").And.Contain("left in place"),
+                "The message should name the line and say that the partly built cohort is left.");
+        });
+    }
+
+    // ---- review findings: quoting, null text, markers outside SQL, malformed entries
+
+    [Test]
+    public void AQuotedTargetCannotReachAnExistingObject()
+    {
+        var existing = new CohortAggregateContainer(Repository, SetOperation.UNION) { Name = "Someone else's" };
+        existing.SaveToDatabase();
+        var name = $"Quoted {Guid.NewGuid():N}";
+        var script = Script(CreateLine, $"SetText \"CohortAggregateContainer:{existing.ID}\" Name \"Changed\"");
+
+        Assert.That(Check(script).Select(p => p.Reason), Has.Member(CohortScriptRefusal.WrongArgumentKind));
+        Assert.That(() => Rebuild(script, name), Throws.TypeOf<CohortScriptProblemsException>());
+        Assert.That(Repository.GetObjectByID<CohortAggregateContainer>(existing.ID).Name, Is.EqualTo("Someone else's"),
+            "The existing container should not change.");
+    }
+
+    [TestCase(false, TestName = "SetOnSharedMetadataIsRefused(bare)")]
+    [TestCase(true, TestName = "SetOnSharedMetadataIsRefused(quoted)")]
+    public void SetOnSharedMetadataIsRefused(bool quoted)
+    {
+        var target = quoted ? $"\"Catalogue:{_catalogue.ID}\"" : $"Catalogue:{_catalogue.ID}";
+        var script = Script(CreateLine, $"Set {target} Name \"Changed\"");
+
+        Assert.That(() => Rebuild(script, $"Shared {Guid.NewGuid():N}"), Throws.TypeOf<CohortScriptProblemsException>()
+            .With.Property(nameof(CohortScriptProblemsException.Problems)).Some
+            .With.Property(nameof(CohortScriptProblem.Reason)).EqualTo(CohortScriptRefusal.WrongArgumentKind));
+        Assert.That(Repository.GetObjectByID<Catalogue>(_catalogue.ID).Name, Does.StartWith("Rebuild catalogue"),
+            "The catalogue should not change.");
+    }
+
+    [Test]
+    public void TheWordNullAsTextAndNullAsAnSqlValueSurviveARoundTrip()
+    {
+        var original = new CohortIdentificationConfiguration(Repository, $"Null text {Guid.NewGuid():N}") { Description = "null" };
+        original.SaveToDatabase();
+        original.CreateRootContainerIfNotExists();
+        new AnyTableSqlParameter(Repository, original, "DECLARE @x AS varchar(10)") { Value = "NULL" }.SaveToDatabase();
+
+        var rebuilt = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuilt.Description, Is.EqualTo("null"), "A description that is the word null should stay that text.");
+            Assert.That(rebuilt.GetAllParameters().Single().Value, Is.EqualTo("NULL"),
+                "An SQL value NULL should stay NULL, not become no value.");
+        });
+    }
+
+    [Test]
+    public void MarkerLikeTextOutsideSqlSurvivesARoundTrip()
+    {
+        var original = new CohortIdentificationConfiguration(Repository, $"Marker text {Guid.NewGuid():N}")
+        {
+            Description = "Literal {$j999} in notes"
+        };
+        original.SaveToDatabase();
+        original.CreateRootContainerIfNotExists();
+
+        Assert.That(RoundTrip(original).Description, Is.EqualTo("Literal {$j999} in notes"),
+            "Markers belong to SQL; other text keeps them as they are.");
+    }
+
+    [Test]
+    public void AnEntryOfCommandsThatIsNotALineIsRefused()
+    {
+        var text = $"cohort-script-format: \"1\"\nCommands:\n  - {YamlText.DoubleQuoted(CreateLine)}\n" +
+                   "  - command: \"Set CohortAggregateContainer:$c2 IsDisabled true\"\n";
+
+        var problems = Check(text);
+
+        Assert.That(problems.Select(p => (p.FileLine, p.Reason)), Has.Member((4, CohortScriptRefusal.NotALine)));
+    }
+
+    [Test]
+    public void AnIdentifierColumnTheCatalogueDoesNotHaveIsRefusedBeforeTheBuild()
+    {
+        var line = $"AddCatalogueToCohortSet CohortAggregateContainer:$c2 Catalogue:{_catalogue.ID} \"{_catalogue.Name}\" \"no_such_column\" false => $a1 $a1.no_such_column";
+
+        Assert.That(Check(Script(CreateLine, line)).Select(p => p.Reason), Has.Member(CohortScriptRefusal.UnknownIdentifierColumn));
+    }
+
+    [Test]
+    public void AProjectSpecificCatalogueNeedsALinkLineBeforeIt()
+    {
+        var project = WhenIHaveA<Project>();
+        var dataset = new ExtractableDataSet(Repository, _catalogue);
+        _ = new ExtractableDataSetProject(Repository, dataset, project);
+        var link = $"LinkCohortToProject CohortIdentificationConfiguration:$cic1 Project:{project.ID} \"{project.Name}\"";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Check(Script(CreateLine, SetLine())).Select(p => p.Reason), Has.Member(CohortScriptRefusal.ProjectNotLinkedInScript));
+            Assert.That(Check(Script(CreateLine, link, SetLine())).Select(p => p.Reason), Has.No.Member(CohortScriptRefusal.ProjectNotLinkedInScript));
+        });
+    }
+
+    [Test]
+    public void FiltersWithNamesOrSqlThatRdmpWouldMisreadSurviveARoundTrip()
+    {
+        var published = new ExtractionFilter(Repository, "Published", _identifier) { WhereSQL = "1 = 0" };
+        published.SaveToDatabase();
+        var original = new CohortIdentificationConfiguration(Repository, $"Odd filters {Guid.NewGuid():N}") { Description = "Catalogue:987654" };
+        original.SaveToDatabase();
+        original.CreateRootContainerIfNotExists();
+        var set = new Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration(Repository, _catalogue, "S") { CountSQL = null };
+        set.SaveToDatabase();
+        _ = new Rdmp.Core.Curation.Data.Aggregation.AggregateDimension(Repository, _identifier, set);
+        original.EnsureNamingConvention(set);
+        original.RootCohortAggregateContainer.AddChild(set, 0);
+        var fc = new Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer(Repository, FilterContainerOperation.AND);
+        set.RootFilterContainer_ID = fc.ID;
+        set.SaveToDatabase();
+        var expected = new (string Name, string Sql)[]
+        {
+            ($"ExtractionFilter:{published.ID}", "1 = 1"), ("null", "NULL"), ("No SQL", null)
+        };
+        foreach (var (name, sql) in expected)
+            new Rdmp.Core.Curation.Data.Aggregation.AggregateFilter(Repository, name, fc) { WhereSQL = sql, IsDisabled = sql == null }
+                .SaveToDatabase();
+
+        var saved = fc.GetFilters().Select(f => (f.Name, f.WhereSQL)).ToArray();
+        var rebuilt = RoundTrip(original);
+        var filters = rebuilt.RootCohortAggregateContainer.GetAggregateConfigurations().Single().RootFilterContainer.GetFilters();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved.Take(3), Is.EqualTo(expected.Take(3)), "The first three filters should be saved as given.");
+            Assert.That(filters.Select(f => (f.Name, f.WhereSQL)), Is.EquivalentTo(saved),
+                "Every filter should come back with exactly its saved name and SQL, including none.");
+            Assert.That(rebuilt.Description, Is.EqualTo("Catalogue:987654"), "A description that looks like a reference stays text.");
+        });
+    }
+
+    [TestCase("null", TestName = "AFilterWithoutANameIsRefused(null)")]
+    [TestCase("\"   \"", TestName = "AFilterWithoutANameIsRefused(spaces)")]
+    public void AFilterWithoutANameIsRefused(string name)
+    {
+        var script = Script(CreateLine, SetLine(), "AddNewFilterContainer AggregateConfiguration:$a1 => $fc1",
+            $"AddCohortFilter AggregateFilterContainer:$fc1 {name} \"1 = 1\" => $f1");
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() => Rebuild(script, $"No name {Guid.NewGuid():N}"));
+
+        Assert.That(e.CommandRefusal, Is.EqualTo(CohortScriptRefusal.MissingArgument),
+            "RDMP requires a filter name, so the command refuses a missing or blank one.");
+    }
+
+    [Test]
+    public void AYamlAliasInCommandsIsRefused()
+    {
+        var text = "cohort-script-format: \"1\"\nexported-from:\n  cohort-name: &disable \"Set CohortAggregateContainer:$c2 IsDisabled true\"\n" +
+                   $"Commands:\n  - {YamlText.DoubleQuoted(CreateLine)}\n  - *disable\n";
+
+        Assert.That(Check(text).Select(p => (p.FileLine, p.Reason)), Has.Member((6, CohortScriptRefusal.NotALine)));
+    }
+
+    [Test]
+    public void ABareNullWhereAPlainWordBelongsIsRefused()
+    {
+        Assert.That(Check(Script(CreateLine, "Set CohortAggregateContainer:$c2 IsDisabled null")).Select(p => p.Reason),
+            Has.Member(CohortScriptRefusal.WrongArgumentKind));
+    }
+
+    // ---- helpers
+
+    private CohortIdentificationConfiguration RoundTrip(CohortIdentificationConfiguration original)
+    {
+        var name = $"{original.Name} (rebuilt)";
+        Rebuild(new BuildScriptWriter(original, RepositoryLocator).Document(), name);
+        return Repository.GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", name).Single();
+    }
+
+    private static string Script(params string[] lines) =>
+        "cohort-script-format: \"1\"\nCommands:\n" + string.Concat(lines.Select(l => $"  - {YamlText.DoubleQuoted(l)}\n"));
+
+    private List<CohortScriptProblem> Check(string text, string newName = null)
+    {
+        var problems = new List<CohortScriptProblem>();
+        var lines = CohortScriptReader.Read(text, problems);
+        new CohortScriptChecker(RepositoryLocator, problems).Check(lines, newName ?? $"Checked {Guid.NewGuid():N}");
+        return problems;
+    }
+
+    private void Rebuild(string text, string name)
+    {
+        var file = new FileInfo(Path.Join(Path.GetTempPath(), $"rdmp-cohortscript-{Guid.NewGuid()}.yaml"));
+        File.WriteAllText(file.FullName, text);
+        try
+        {
+            var activator = new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true };
+            new ExecuteCommandBuildCohortFromScript(activator, file, name).Execute();
+        }
+        finally
+        {
+            file.Delete();
+        }
+    }
+}

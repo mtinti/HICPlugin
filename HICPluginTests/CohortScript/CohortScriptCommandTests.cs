@@ -551,7 +551,9 @@ internal class CohortScriptCommandTests : UnitTests
             new[] { "AddChildFilterContainer", $"AggregateFilterContainer:{fc.ID}" },
             new[] { "SetFilterSource", $"AggregateFilter:{filter.ID}", $"ExtractionFilter:{published.ID}", "null" },
             new[] { "RenameCohortSet", $"AggregateConfiguration:{set.ID}", "New name" },
-            new[] { "SetTopX", $"AggregateConfiguration:{set.ID}", "10", "null", "Ascending" }
+            new[] { "SetTopX", $"AggregateConfiguration:{set.ID}", "10", "null", "Ascending" },
+            new[] { "AddCohortFilter", $"AggregateFilterContainer:{fc.ID}", "New filter", "1 = 1" },
+            new[] { "SetText", $"AggregateConfiguration:{set.ID}", "Description", "Changed" }
         };
 
         var refusals = lines.Select(line => (line[0], ((CohortScriptCommand)CommandLine.RunCommand(_activator, line).Command)?.Refusal))

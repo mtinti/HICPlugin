@@ -280,6 +280,37 @@ internal class RdmpCommandBehaviourTests : UnitTests
     }
 
     [Test]
+    public void CreateNewFilterReadsANameThatLooksLikeAPublishedFilterAsOneToImport()
+    {
+        var (cic, container) = MakeCohort();
+        var set = AddSet(cic, container);
+        var fc = new AggregateFilterContainer(Repository, FilterContainerOperation.AND);
+        set.RootFilterContainer_ID = fc.ID;
+        set.SaveToDatabase();
+        var published = new ExtractionFilter(Repository, "Published", _date) { WhereSQL = "1 = 0" };
+        published.SaveToDatabase();
+
+        Run(NewActivator(), "CreateNewFilter", $"AggregateFilterContainer:{fc.ID}", $"ExtractionFilter:{published.ID}", "1 = 1");
+
+        // this is why the plugin has AddCohortFilter: a saved filter's name must come back as text
+        var filter = fc.GetFilters().Single();
+        Assert.That(filter.WhereSQL, Is.EqualTo("1 = 0"),
+            "RDMP 9.3.0 imports the published filter named by the second argument instead of using it as the name.");
+    }
+
+    [Test]
+    public void SetReadsTheWordNullInQuotesAsNoValue()
+    {
+        var (cic, _) = MakeCohort();
+
+        Run(NewActivator(), "Set", $"CohortIdentificationConfiguration:{cic.ID}", "Description", "NULL");
+
+        // this is why the plugin has SetText: a description that is the word null must stay that text
+        Assert.That(Repository.GetObjectByID<CohortIdentificationConfiguration>(cic.ID).Description, Is.Null,
+            "RDMP 9.3.0's Set reads the word null, in any case, as no value.");
+    }
+
+    [Test]
     public void DeleteRemovesAContainerWithoutAPromptWhenInteractiveDeletesIsOff()
     {
         var (_, container) = MakeCohort();

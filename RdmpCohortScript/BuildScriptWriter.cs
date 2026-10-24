@@ -111,7 +111,7 @@ internal sealed class BuildScriptWriter
         SetIfGiven($"CohortIdentificationConfiguration:{cicHandle}", "Description", _cic.Description);
         SetIfGiven($"CohortIdentificationConfiguration:{cicHandle}", "Ticket", _cic.Ticket);
         if (!string.IsNullOrEmpty(_cic.Folder) && _cic.Folder != DefaultFolder)
-            Set($"CohortIdentificationConfiguration:{cicHandle}", "Folder", ScriptLine.QuoteText(_cic.Folder));
+            SetText($"CohortIdentificationConfiguration:{cicHandle}", "Folder", _cic.Folder);
 
         foreach (var parameter in _cic.GetAllParameters().OrderBy(p => p.ParameterName, StringComparer.Ordinal))
             AddParameter($"CohortIdentificationConfiguration:{cicHandle}", parameter);
@@ -137,7 +137,7 @@ internal sealed class BuildScriptWriter
     private void WriteContainerSettings(CohortAggregateContainer container, string handle)
     {
         Set($"CohortAggregateContainer:{handle}", "Operation", container.Operation.ToString());
-        Set($"CohortAggregateContainer:{handle}", "Name", ScriptLine.QuoteText(container.Name));
+        SetText($"CohortAggregateContainer:{handle}", "Name", container.Name);
         if (container.IsDisabled)
             _disabled.Add(SetLine($"CohortAggregateContainer:{handle}", "IsDisabled", "true"));
     }
@@ -179,10 +179,6 @@ internal sealed class BuildScriptWriter
     {
         var catalogue = CatalogueOf(set);
         RefuseWhatASetCannotHave(set, catalogue);
-
-        if (!string.IsNullOrWhiteSpace(set.CountSQL))
-            throw new CohortScriptExportException(CohortScriptRefusal.CountColumnOnSet,
-                $"Set {set.ID} \"{set.Name}\" has a count column, which RDMP allows only on a patient index table. Remove it from the set.");
 
         var dimensions = set.AggregateDimensions;
         var identifier = IdentifierDimension(set, dimensions);
@@ -244,8 +240,6 @@ internal sealed class BuildScriptWriter
         }, handles.ToArray());
 
         WriteAggregateBody(table, handle, catalogue);
-        if (!string.IsNullOrWhiteSpace(table.CountSQL))
-            Set($"AggregateConfiguration:{handle}", "CountSQL", ScriptLine.QuoteText(Mark(table.CountSQL)));
     }
 
     private void WriteAggregateBody(AggregateConfiguration aggregate, string handle, Catalogue catalogue)
@@ -266,15 +260,20 @@ internal sealed class BuildScriptWriter
             var target = $"AggregateDimension:{DimensionHandle(handle, dimension)}";
             // written even when equal to the column's, so a later change in the catalogue does not change the
             // rebuilt cohort: the script is the saved cohort
-            Set(target, "SelectSQL", ScriptLine.QuoteText(Mark(dimension.SelectSQL)));
+            SetText(target, "SelectSQL", Mark(dimension.SelectSQL));
             if (dimension.Alias != null || column.Alias != null)
-                Set(target, "Alias", ScriptLine.QuoteText(dimension.Alias));
+                SetText(target, "Alias", dimension.Alias);
             if (!dimension.GroupBy)
                 Set(target, "GroupBy", "false");
         }
 
+        // RDMP's query uses a count column on any set, not only on a patient index table: it adds the column and a
+        // GROUP BY, which changes what EXCEPT and INTERSECT compare. The rebuilt set starts without one.
+        if (!string.IsNullOrWhiteSpace(aggregate.CountSQL))
+            SetText($"AggregateConfiguration:{handle}", "CountSQL", Mark(aggregate.CountSQL));
+
         if (!string.IsNullOrWhiteSpace(aggregate.HavingSQL))
-            Set($"AggregateConfiguration:{handle}", "HavingSQL", ScriptLine.QuoteText(Mark(aggregate.HavingSQL)));
+            SetText($"AggregateConfiguration:{handle}", "HavingSQL", Mark(aggregate.HavingSQL));
 
         foreach (var table in aggregate.ForcedJoins.OrderBy(t => t.ID))
             Add("AddForcedJoin", new[] { $"AggregateConfiguration:{handle}", $"TableInfo:{table.ID}", ScriptLine.QuoteText(table.Name) });
@@ -311,7 +310,7 @@ internal sealed class BuildScriptWriter
         foreach (var filter in container.GetFilters().Cast<AggregateFilter>().OrderBy(f => f.Order).ThenBy(f => f.ID))
         {
             var filterHandle = Handle("f", filter.ID);
-            Add("CreateNewFilter", new[]
+            Add("AddCohortFilter", new[]
             {
                 $"AggregateFilterContainer:{handle}", ScriptLine.QuoteText(filter.Name), ScriptLine.QuoteText(Mark(filter.WhereSQL))
             }, filterHandle);
@@ -428,8 +427,11 @@ internal sealed class BuildScriptWriter
     private void SetIfGiven(string target, string property, string value)
     {
         if (!string.IsNullOrEmpty(value))
-            Set(target, property, ScriptLine.QuoteText(value));
+            SetText(target, property, value);
     }
+
+    private void SetText(string target, string property, string text) =>
+        _lines.Add(ScriptLine.Write("SetText", new[] { target, property, ScriptLine.QuoteText(text) }));
 
     private void Set(string target, string property, string value) => _lines.Add(SetLine(target, property, value));
 

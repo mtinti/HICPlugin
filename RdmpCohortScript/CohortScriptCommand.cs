@@ -172,9 +172,6 @@ public enum CohortScriptRefusal
     /// <summary>Export: the cohort has no root container.</summary>
     NoRootContainer,
 
-    /// <summary>Export: a set that is not a patient index table has a count column.</summary>
-    CountColumnOnSet,
-
     /// <summary>Export: a set selects columns other than its identifier column.</summary>
     ExtraColumnsOnSet,
 
@@ -206,5 +203,71 @@ public enum CohortScriptRefusal
     SetNameLooksPrefixed,
 
     /// <summary>A patient index table cannot itself join a patient index table.</summary>
-    JoinFromAPatientIndexTable
+    JoinFromAPatientIndexTable,
+
+    /// <summary>Script: the file is not YAML, or a value is not double-quoted.</summary>
+    NotStrictYaml,
+
+    /// <summary>Script: the file is not format 1, or has no Commands list.</summary>
+    NotFormat1,
+
+    /// <summary>Script: a line cannot be split into a command, arguments and handles.</summary>
+    UnparseableLine,
+
+    /// <summary>Script: the first line does not create the cohort, or another line does.</summary>
+    CreateLineNotFirst,
+
+    /// <summary>Script: a cohort with the new name already exists.</summary>
+    CohortNameTaken,
+
+    /// <summary>Script: the command is not one a build script may use.</summary>
+    UnknownCommand,
+
+    /// <summary>Script: the line has the wrong number of arguments.</summary>
+    WrongArgumentCount,
+
+    /// <summary>Script: the line binds the wrong number of handles.</summary>
+    WrongHandleCount,
+
+    /// <summary>Script: a handle is malformed, or has the wrong role for where it is used.</summary>
+    BadHandle,
+
+    /// <summary>Script: two lines create the same handle.</summary>
+    HandleCreatedTwice,
+
+    /// <summary>Script: a handle is used before the line that creates it.</summary>
+    HandleUsedBeforeCreated,
+
+    /// <summary>Script: a line refers by id to an object it should refer to by handle.</summary>
+    IdInsteadOfHandle,
+
+    /// <summary>Script: a reference to an existing object is not written Type:id.</summary>
+    BadReference,
+
+    /// <summary>Script: a reference to an existing object gives no name.</summary>
+    MissingName,
+
+    /// <summary>Script: an existing object the script names does not exist.</summary>
+    ReferenceNotFound,
+
+    /// <summary>Script: Set changes a property a build script may not set.</summary>
+    PropertyNotAllowed,
+
+    /// <summary>Script: an argument is not of the kind its position holds (handle, reference, text, SQL or word).</summary>
+    WrongArgumentKind,
+
+    /// <summary>Script: an entry of the Commands list is not a quoted line.</summary>
+    NotALine,
+
+    /// <summary>Script: a project-specific catalogue is used before the script links the cohort to its project.</summary>
+    ProjectNotLinkedInScript,
+
+    /// <summary>Rebuild: RDMP refused to run a line.</summary>
+    LineRefused,
+
+    /// <summary>Rebuild: a line failed with an error.</summary>
+    LineFailed,
+
+    /// <summary>Rebuild: a line ran but did not make the change it should.</summary>
+    LineHadNoEffect
 }

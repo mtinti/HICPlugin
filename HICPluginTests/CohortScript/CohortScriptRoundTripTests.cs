@@ -88,10 +88,12 @@ internal class CohortScriptRoundTripTests : UnitTests
         // a filter that references a parameter. It is marked as imported from a published filter
         // (ClonedFromExtractionFilter_ID) but its WhereSQL has diverged from that master - the
         // export must reproduce this ACTUAL text + parameter, not re-import the (drifted) master.
+        var published = new ExtractionFilter(Repository, "Published code list", idA) { WhereSQL = "MyOtherCol IN ('Z9')" };
+        published.SaveToDatabase();
         var codeFilter = new AggregateFilter(Repository, "CodeList", fcA)
         {
             WhereSQL = "MyOtherCol IN (@codes)",
-            ClonedFromExtractionFilter_ID = 999 // a published filter whose current text differs
+            ClonedFromExtractionFilter_ID = published.ID // a published filter whose current text differs
         };
         codeFilter.SaveToDatabase();
         var codeParam = (AggregateFilterParameter)codeFilter.GetFilterFactory()
@@ -106,6 +108,7 @@ internal class CohortScriptRoundTripTests : UnitTests
         root.AddChild(aggB, 1);
         aggB.HavingSQL = "count(*) >= 2"; // patients appearing at least twice
         aggB.SaveToDatabase();
+        new AggregateTopX(Repository, aggB, 50) { OrderByDirection = AggregateTopXOrderByDirection.Ascending }.SaveToDatabase();
         new AnyTableSqlParameter(Repository, aggB, "DECLARE @window as int") { Value = "90" }.SaveToDatabase();
         var use = joinable.AddUser(aggB);
         use.JoinType = ExtractionJoinType.Inner;
@@ -216,6 +219,10 @@ internal class CohortScriptRoundTripTests : UnitTests
 
             // HAVING clause round-tripped (changes which patients the set matches)
             Assert.That(rB.HavingSQL, Is.EqualTo("count(*) >= 2"));
+            Assert.That(rB.GetTopXIfAny()?.TopX, Is.EqualTo(50), "Top X should round-trip.");
+            Assert.That(rB.GetTopXIfAny()?.OrderByDirection, Is.EqualTo(AggregateTopXOrderByDirection.Ascending));
+            Assert.That(((AggregateFilter)rootFc.GetFilters().Single(f => f.Name == "CodeList")).ClonedFromExtractionFilter_ID,
+                Is.EqualTo(published.ID), "The filter's published source should round-trip.");
 
             // patient index table round-tripped (one joinable, used by set B with an Inner join)
             var joinables = rebuilt.GetAllJoinables();
