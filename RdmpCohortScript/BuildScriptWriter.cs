@@ -275,7 +275,7 @@ internal sealed class BuildScriptWriter
         if (!string.IsNullOrWhiteSpace(aggregate.HavingSQL))
             SetText($"AggregateConfiguration:{handle}", "HavingSQL", Mark(aggregate.HavingSQL));
 
-        foreach (var table in aggregate.ForcedJoins.OrderBy(t => t.ID))
+        foreach (var table in SavedForcedJoins.Of(aggregate).OrderBy(t => t.ID))
             Add("AddForcedJoin", new[] { $"AggregateConfiguration:{handle}", $"TableInfo:{table.ID}", ScriptLine.QuoteText(table.Name) });
 
         foreach (var parameter in _locator.CatalogueRepository.GetAllObjects<AnyTableSqlParameter>()

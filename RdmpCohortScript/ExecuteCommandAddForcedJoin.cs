@@ -42,7 +42,7 @@ public class ExecuteCommandAddForcedJoin : CohortScriptCommand
             return;
         }
 
-        if (set.ForcedJoins.Any(t => t.ID == table.ID))
+        if (SavedForcedJoins.Of(set).Any(t => t.ID == table.ID))
             Refuse(CohortScriptRefusal.AlreadyForcedJoin, $"Set {set.ID} already has a forced join to table {table.ID} \"{table.Name}\".");
     }
 

@@ -168,6 +168,11 @@ The check also warns, without refusing, about every `SetTopX` line. RDMP 9.3.0 b
 without an ORDER BY, so the patients it keeps are not fixed, and a rebuild may return others. The column to
 order by is kept for the set's graph and does not change this.
 
+RDMP's user setting "always join everything" (`AlwaysJoinEverything`) makes RDMP join every main table of a
+set's catalogue when it runs the set, and list those tables as the set's forced joins. Nothing is saved for
+them. The export, the manifest, the `AddForcedJoin` line and the clean-up use only the forced joins saved for
+the set, so the setting does not change what a script holds or builds.
+
 A script without the line `cohort-script-format: "1"` was written by an earlier version of the export, in
 another format. The rebuild does not read it. Export that cohort again.
 

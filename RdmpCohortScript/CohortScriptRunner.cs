@@ -465,7 +465,7 @@ internal sealed class CohortScriptRunner
                 break;
             case "AddForcedJoin":
                 var joined = Get<AggregateConfiguration>(arguments[0]);
-                if (!joined.ForcedJoins.Any(t => $"TableInfo:{t.ID}" == arguments[1]))
+                if (!SavedForcedJoins.Of(joined).Any(t => $"TableInfo:{t.ID}" == arguments[1]))
                     problem = $"Set {joined.ID} has no forced join to {arguments[1]}.";
                 break;
             case "SetTopX":

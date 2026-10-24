@@ -39,7 +39,7 @@ internal sealed class CatalogueManifestWriter
             .Select(f => (Catalogue)f.ExtractionInformation.CatalogueItem.Catalogue);
         var catalogues = aggregates.Select(a => (Catalogue)a.Catalogue).Where(c => c != null)
             .Concat(sourceCatalogues).DistinctBy(c => c.ID).ToArray();
-        var tables = aggregates.SelectMany(a => a.ForcedJoins).DistinctBy(t => t.ID).ToArray();
+        var tables = aggregates.SelectMany(SavedForcedJoins.Of).DistinctBy(t => t.ID).ToArray();
         var projects = _locator.DataExportRepository?
             .GetAllObjectsWhere<ProjectCohortIdentificationConfigurationAssociation>("CohortIdentificationConfiguration_ID", cic.ID)
             .Select(a => (IProject)a.Project).ToArray() ?? Array.Empty<IProject>();

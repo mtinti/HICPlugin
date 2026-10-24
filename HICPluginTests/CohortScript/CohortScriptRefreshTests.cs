@@ -569,6 +569,15 @@ internal sealed class FaultyRepository : MemoryDataExportRepository
     /// <summary>When true, a removal that throws has removed the forced join first.</summary>
     public bool BreakForcedJoinsBeforeFailing { get; set; }
 
+    /// <summary>When true, a new forced join is not saved, as if the save were lost.</summary>
+    public bool IgnoreNewForcedJoins { get; set; }
+
+    public override void CreateLinkBetween(AggregateConfiguration configuration, ITableInfo tableInfo)
+    {
+        if (!IgnoreNewForcedJoins)
+            base.CreateLinkBetween(configuration, tableInfo);
+    }
+
     /// <summary>When true, removing a forced join that is not saved throws, as the database does when no row is deleted.</summary>
     public bool RefuseToRemoveAMissingForcedJoin { get; set; }
 
