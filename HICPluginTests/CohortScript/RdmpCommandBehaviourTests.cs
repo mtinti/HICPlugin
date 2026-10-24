@@ -321,6 +321,22 @@ internal class RdmpCommandBehaviourTests : UnitTests
         });
     }
 
+    [Test]
+    public void RdmpsAddCatalogueCommandStillRefusesTheRightIdentifierColumnWhenTheIdsDiffer()
+    {
+        var (_, container) = MakeCohort();
+        Assume.That(_identifier.CatalogueItem_ID, Is.Not.EqualTo(_catalogue.ID),
+            "The check is only wrong when the catalogue item id differs from the catalogue id.");
+
+        var command = new Rdmp.Core.CommandExecution.AtomicCommands.ExecuteCommandAddCatalogueToCohortIdentificationSetContainer(
+            NewActivator(), container, _catalogue, _identifier);
+
+        // RDMP compares the column's catalogue item id with the catalogue's id. AddCatalogueToCohortSet works
+        // around it, and keeps working once RDMP is fixed, so a fix only warns instead of failing the build.
+        if (command.ReasonCommandImpossible?.Contains("is not from the same Catalogue") != true)
+            Assert.Warn("RDMP has fixed the identifier column check. The workaround in AddCatalogueToCohortSet can be removed.");
+    }
+
     private (CohortIdentificationConfiguration cic, CohortAggregateContainer root) MakeCohort()
     {
         var cic = new CohortIdentificationConfiguration(Repository, $"Behaviour {Guid.NewGuid():N}");
@@ -339,18 +355,8 @@ internal class RdmpCommandBehaviourTests : UnitTests
 
     private PromptRefusingActivator NewActivator() => new(RepositoryLocator);
 
-    private static (bool Completed, string ImpossibleReason) Run(IBasicActivateItems activator, params string[] line)
-    {
-        var invoker = new CommandInvoker(activator);
-        var type = invoker.GetSupportedCommands()
-            .First(t => BasicCommandExecution.GetCommandName(t.Name).Equals(line[0], StringComparison.OrdinalIgnoreCase));
-        var completed = false;
-        string reason = null;
-        invoker.CommandCompleted += (_, _) => completed = true;
-        invoker.CommandImpossible += (_, e) => reason = e.Command.ReasonCommandImpossible;
-        invoker.ExecuteCommand(type, new CommandLineObjectPicker(line.Skip(1).ToArray(), activator));
-        return (completed, reason);
-    }
+    private static (bool Completed, string ImpossibleReason) Run(IBasicActivateItems activator, params string[] line) =>
+        CommandLine.Run(activator, line);
 
     private Catalogue MakeCohortCatalogue(string name, out ExtractionInformation idEi, out ExtractionInformation dateEi)
     {
@@ -363,66 +369,5 @@ internal class RdmpCommandBehaviourTests : UnitTests
         idEi = otherEi;
         throwaway.DeleteInDatabase();
         return cata;
-    }
-
-    /// <summary>
-    /// An interactive activator, as in the GUI. It records every question and refuses it, except a yes/no question,
-    /// which it answers with <see cref="AnswerYesNo"/>.
-    /// </summary>
-    private sealed class PromptRefusingActivator : ConsoleInputManager
-    {
-        public List<string> Prompts { get; } = new();
-        public bool AnswerYesNo { get; set; }
-
-        public PromptRefusingActivator(IRDMPPlatformRepositoryServiceLocator locator)
-            : base(locator, ThrowImmediatelyCheckNotifier.Quiet)
-        {
-            DisallowInput = false;
-        }
-
-        private Exception Refuse(string what)
-        {
-            Prompts.Add(what);
-            return new InvalidOperationException($"The command asked a question: {what}");
-        }
-
-        public override bool YesNo(DialogArgs args, out bool chosen)
-        {
-            Prompts.Add($"YesNo: {args.TaskDescription}");
-            chosen = AnswerYesNo;
-            return true;
-        }
-
-        public override bool TypeText(DialogArgs args, int maxLength, string initialText, out string text,
-            bool requireSaneHeaderText) => throw Refuse($"TypeText: {args.TaskDescription}");
-
-        public override bool SelectEnum(DialogArgs args, Type enumType, out Enum chosen) =>
-            throw Refuse($"SelectEnum: {args.TaskDescription}");
-
-        public override bool SelectType(DialogArgs args, Type[] available, out Type chosen) =>
-            throw Refuse($"SelectType: {args.TaskDescription}");
-
-        public override IMapsDirectlyToDatabaseTable SelectOne(DialogArgs args,
-            IMapsDirectlyToDatabaseTable[] availableObjects) => throw Refuse($"SelectOne: {args.TaskDescription}");
-
-        public override bool SelectObject<T>(DialogArgs args, T[] available, out T selected) =>
-            throw Refuse($"SelectObject: {args.TaskDescription}");
-
-        public override bool SelectObjects<T>(DialogArgs args, T[] available, out T[] selected) =>
-            throw Refuse($"SelectObjects: {args.TaskDescription}");
-
-        public override DirectoryInfo SelectDirectory(string prompt) => throw Refuse($"SelectDirectory: {prompt}");
-
-        public override FileInfo SelectFile(string prompt) => throw Refuse($"SelectFile: {prompt}");
-
-        public override FileInfo SelectFile(string prompt, string patternDescription, string pattern) =>
-            throw Refuse($"SelectFile: {prompt}");
-
-        public override FileInfo[] SelectFiles(string prompt, string patternDescription, string pattern) =>
-            throw Refuse($"SelectFiles: {prompt}");
-
-        public override void Show(string title, string message)
-        {
-        }
     }
 }
