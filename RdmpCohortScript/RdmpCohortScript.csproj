@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<AssemblyTitle>RdmpCohortScript</AssemblyTitle>
+		<Product>RdmpCohortScript</Product>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<DebugType>embedded</DebugType>
+		<Nullable>disable</Nullable>
+		<ImplicitUsings>disable</ImplicitUsings>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<DebugType>portable</DebugType>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<DebugType>portable</DebugType>
+	</PropertyGroup>
+	<ItemGroup>
+		<Compile Include="..\SharedAssemblyInfo.cs" Link="SharedAssemblyInfo.cs" />
+	</ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\RDMP\Rdmp.Core\Rdmp.Core.csproj" />
+	</ItemGroup>
+</Project>

@@ -48,6 +48,8 @@ Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "InterfaceToJira", "Interfac
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RdmpCohortBuildBreakdownByGroups", "RdmpCohortBuildBreakdownByGroups\RdmpCohortBuildBreakdownByGroups.csproj", "{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RdmpCohortScript", "RdmpCohortScript\RdmpCohortScript.csproj", "{22343E47-0F04-4157-B8CB-30E2EC495FA8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -164,6 +166,10 @@ Global
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C62DC15C-83E3-4D81-9F94-3534E4DA4A96}.Release|Any CPU.Build.0 = Release|Any CPU
+		{22343E47-0F04-4157-B8CB-30E2EC495FA8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{22343E47-0F04-4157-B8CB-30E2EC495FA8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{22343E47-0F04-4157-B8CB-30E2EC495FA8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{22343E47-0F04-4157-B8CB-30E2EC495FA8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
