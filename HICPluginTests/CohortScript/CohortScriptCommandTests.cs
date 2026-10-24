@@ -288,7 +288,7 @@ internal class CohortScriptCommandTests : UnitTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Completed, Is.True, $"The line should complete. RDMP said: {result.ImpossibleReason}");
-            Assert.That(set.ForcedJoins.Select(t => t.ID), Is.EqualTo(new[] { table.ID }));
+            Assert.That(SavedForcedJoins.Of(set).Select(t => t.ID), Is.EqualTo(new[] { table.ID }), "The set should have one saved forced join, to the table.");
         });
     }
 
@@ -301,7 +301,7 @@ internal class CohortScriptCommandTests : UnitTests
         var result = Run("AddForcedJoin", $"AggregateConfiguration:{set.ID}", $"TableInfo:{table.ID}", "[Other]..[Table]");
 
         AssertRefused(result, CohortScriptRefusal.NameMismatch);
-        Assert.That(set.ForcedJoins, Is.Empty, "No forced join should be made.");
+        Assert.That(SavedForcedJoins.Of(set), Is.Empty, "No forced join should be made.");
     }
 
     [Test]

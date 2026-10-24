@@ -448,7 +448,8 @@ internal static class CohortSnapshot
                 lines.Add($"{indent}  column {d.ExtractionInformation_ID} select={Sql(d.SelectSQL)} alias={Text(d.Alias)} groupby={d.GroupBy} identifier={d.IsExtractionIdentifier}");
             if (a.GetTopXIfAny() is { } topX)
                 lines.Add($"{indent}  top {topX.TopX} by={topX.OrderByDimensionIfAny?.ExtractionInformation_ID.ToString() ?? "count"} {topX.OrderByDirection}");
-            foreach (var table in a.ForcedJoins.OrderBy(t => t.ID))
+            // the saved joins, not the tables RDMP adds when its "always join everything" setting is on
+            foreach (var table in SavedForcedJoins.Of(a).OrderBy(t => t.ID))
                 lines.Add($"{indent}  forced join to table {table.ID}");
             foreach (var parameter in repository.GetAllObjects<AnyTableSqlParameter>()
                          .Where(p => p.ReferencedObjectType == nameof(AggregateConfiguration) && p.ReferencedObjectID == a.ID)

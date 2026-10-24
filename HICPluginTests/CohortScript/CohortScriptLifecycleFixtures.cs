@@ -13,6 +13,7 @@ using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.Curation.Data.Cohort.Joinables;
 using Rdmp.Core.DataExport.Data;
 using Rdmp.Core.Repositories;
+using RdmpCohortScript;
 
 namespace HICPluginTests;
 
@@ -347,7 +348,7 @@ public abstract partial class CohortScriptLifecycleBase
             var drug = inclusion[0];
             var drugFilters = (AggregateFilterContainer)drug.RootFilterContainer;
             Expect(drug.Description == "Drug A since the study start", "the drug set's description");
-            Expect(drug.ForcedJoins.Select(t => t.ID).SequenceEqual(new[] { _forcedTable }), "a forced join to the registry on the drug set");
+            Expect(SavedForcedJoins.Of(drug).Select(t => t.ID).SequenceEqual(new[] { _forcedTable }), "a forced join to the registry on the drug set");
             Expect(drugFilters.Operation == FilterContainerOperation.AND &&
                    drugFilters.GetFilters().Select(f => f.Name).OrderBy(n => n).SequenceEqual(new[] { "Drug", "Not blank" }),
                 "the Drug and Not blank filters in an AND container");
