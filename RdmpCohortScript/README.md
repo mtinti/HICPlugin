@@ -95,7 +95,8 @@ runs as `rdmp cmd <Command> ...`.
        rdmp cmd BuildCohortFromScript .\out\diabetes-since-2010\build.script.yaml "Diabetes since 2010 (rebuilt)"
 
    The new name must be free. A third argument, `true`, accepts existing objects renamed since the export, with
-   a warning for each.
+   a warning for each. In the desktop client, the new cohort is selected in the Cohort Builder tree when the
+   build ends, and that panel opens if it was closed. The build does not open the cohort itself.
 
 5. Write a manifest for an author:
 
@@ -118,6 +119,9 @@ runs as `rdmp cmd <Command> ...`.
   same name.
 - In the desktop client, the rebuild does not ask about the containers it deletes, and restores that setting
   afterwards.
+- The lines do not refresh RDMP's list of objects. Each refresh loads every object on the platform again, so the
+  rebuild refreshes once, at the end. A failed rebuild refreshes only when the clean-up left something behind or
+  could not check, and its message names those objects.
 
 ## Mandatory filters
 
@@ -185,6 +189,12 @@ The database tests use the server in `TestDatabases.txt`.
   command needs a row there, a class, an example in `CohortScriptReference`, and a new `COMMANDS.md`.
 - A plugin command takes its arguments typed, refuses with a `CohortScriptRefusal`, and never asks a question.
 - The export and the rebuild must agree: every new field needs a writer line, a rebuild test, and a round trip.
+- The runner hands each command a `NoPublishActivator`. It forwards every member of RDMP's activator except
+  `Publish`, `PublishNearest`, `DeleteWithConfirmation`, `RequestItemEmphasis` and `Activate`, so the lines do not
+  refresh, show or open anything. When RDMP adds a member to `IBasicActivateItems`, the plugin does not build
+  until the wrapper forwards it.
+- The clean-up returns a `CohortScriptCleanupResult`, and `CohortScriptRebuildException.Cleanup` carries it. The
+  build command reads it to decide whether to refresh, and never parses a message.
 
 ## Manual checks before a release
 
@@ -192,4 +202,6 @@ The database tests use the server in `TestDatabases.txt`.
    `rdmp cmd ListSupportedCommands`. The six commands and the 13 line commands should be listed.
 2. Export a test cohort, check the script, and rebuild it under a new name.
 3. In the desktop client, right-click a cohort and run each entry of the **Cohort script** submenu.
-4. Read every message a user may see, and check that it names the object and says what to do.
+4. In the desktop client, close the Cohort Builder panel and build from a script. The panel opens with the new
+   cohort selected, and no tab opens for the cohort.
+5. Read every message a user may see, and check that it names the object and says what to do.

@@ -34,14 +34,22 @@ public sealed class CohortScriptRebuildException : Exception
     /// <summary>When a plugin command refused the line, its own reason; otherwise null.</summary>
     public CohortScriptRefusal? CommandRefusal { get; }
 
+    /// <summary>What the clean-up after the failure removed and left; null when the rebuild had built nothing.</summary>
+    public CohortScriptCleanupResult Cleanup { get; }
+
     public CohortScriptRebuildException(int fileLine, CohortScriptRefusal reason, string message, Exception inner = null,
-        CohortScriptRefusal? commandRefusal = null)
+        CohortScriptRefusal? commandRefusal = null, CohortScriptCleanupResult cleanup = null)
         : base(message, inner)
     {
         FileLine = fileLine;
         Reason = reason;
         CommandRefusal = commandRefusal;
+        Cleanup = cleanup;
     }
+
+    /// <summary>The same failure, with a sentence added to the end of the message.</summary>
+    internal CohortScriptRebuildException WithSentence(string sentence) =>
+        new(FileLine, Reason, $"{Message} {sentence}", InnerException, CommandRefusal, Cleanup);
 }
 
 /// <summary>Runs checked build script lines and binds their handles.</summary>
@@ -59,6 +67,9 @@ internal sealed class CohortScriptRunner
     };
 
     private readonly IBasicActivateItems _activator;
+
+    // what each command is given, so the lines do not refresh RDMP's list of objects; the build command refreshes once
+    private readonly IBasicActivateItems _commandActivator;
     private readonly ICatalogueRepository _repository;
     private readonly string _newCohortName;
     private readonly Dictionary<string, int> _ids = new(StringComparer.Ordinal);
@@ -79,6 +90,7 @@ internal sealed class CohortScriptRunner
     {
         _acceptRenamed = acceptRenamed;
         _activator = activator;
+        _commandActivator = new NoPublishActivator(activator);
         _repository = activator.RepositoryLocator.CatalogueRepository;
         _newCohortName = newCohortName;
 
@@ -128,12 +140,12 @@ internal sealed class CohortScriptRunner
             // the create line may fail after RDMP saved the cohort but before the runner bound it; the cohort this
             // run saved is known from the Inserting events, never looked up by name, which another session may share
             Cohort ??= _made.OfType<CohortIdentificationConfiguration>().FirstOrDefault();
-            var outcome = Cohort == null && _made.Count == 0
-                ? "Nothing was built."
+            var cleanup = Cohort == null && _made.Count == 0
+                ? null
                 : new CohortScriptCleanup(_activator.RepositoryLocator).Remove(Cohort, _made);
             Cohort = null;
-            throw new CohortScriptRebuildException(stopped.FileLine, stopped.Reason, $"{stopped.Message} {outcome}",
-                stopped.InnerException, stopped.CommandRefusal);
+            throw new CohortScriptRebuildException(stopped.FileLine, stopped.Reason,
+                $"{stopped.Message} {cleanup?.Sentence ?? "Nothing was built."}", stopped.InnerException, stopped.CommandRefusal, cleanup);
         }
     }
 
@@ -231,7 +243,7 @@ internal sealed class CohortScriptRunner
         {
             var parameters = constructor.GetParameters();
             var values = new object[parameters.Length];
-            values[0] = _activator;
+            values[0] = _commandActivator;
             if (!TryConvert(definition, arguments, parameters, values))
                 continue;
             for (var i = 1 + arguments.Length; i < parameters.Length; i++)

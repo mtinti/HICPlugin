@@ -13,6 +13,7 @@ using Rdmp.Core.CommandLine.Interactive;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.DataExport.Data;
+using Rdmp.Core.Repositories;
 using Rdmp.Core.ReusableLibraryCode.Checks;
 using RdmpCohortScript;
 using Tests.Common;
@@ -176,7 +177,7 @@ internal class CohortScriptRebuildTests : UnitTests
         });
     }
 
-    // ---- review findings: quoting, null text, markers outside SQL, malformed entries
+    // ---- quoting, null text, markers outside SQL, malformed entries
 
     [Test]
     public void AQuotedTargetCannotReachAnExistingObject()
@@ -429,19 +430,42 @@ internal class CohortScriptRebuildTests : UnitTests
             "With the option, the cohort should be built from the renamed catalogue.");
     }
 
-    [Test]
-    public void ACreateLineThatFailsAfterSavingTheCohortLeavesNothingBehind()
+    // the create line fails inside RDMP's command, after the object is saved and before the command returns, so the
+    // runner has not bound the cohort yet: it knows what to remove only from what the line saved
+    [TestCase(false, TestName = "ACreateLineThatFailsAfterSavingTheCohortLeavesNothingBehind")]
+    [TestCase(true, TestName = "ACreateLineThatFailsAfterSavingAnAutomaticContainerLeavesNothingBehind")]
+    public void ACreateLineThatFailsAfterSavingLeavesNothingBehind(bool failAtAContainer)
     {
-        var activator = new FailingActivator(RepositoryLocator) { FailOnPublishOf = typeof(CohortIdentificationConfiguration) };
-        var name = $"Fails in create {Guid.NewGuid():N}";
-        var before = Counts();
+        var repository = new FaultyRepository();
+        var locator = new Rdmp.Core.Repositories.RepositoryProvider(repository);
+        var throwaway = WhenIHaveA(repository, out _, out var first);
+        var catalogue = throwaway.Catalogue;
+        first.IsExtractionIdentifier = true;
+        first.SaveToDatabase();
+        throwaway.DeleteInDatabase();
+        var bystander = new CohortIdentificationConfiguration(repository, $"Bystander {Guid.NewGuid():N}");
+        bystander.CreateRootContainerIfNotExists();
+        var counts = CountsIn(repository);
 
-        var e = Assert.Throws<CohortScriptRebuildException>(() => RebuildWith(activator, Script(CreateLine, SetLine()), name));
+        var containers = 0;
+        repository.FailAfterInsert = o =>
+            (failAtAContainer ? o is CohortAggregateContainer && ++containers == 2 : o is CohortIdentificationConfiguration)
+                ? new InvalidOperationException("A failure after RDMP saved the object.")
+                : null;
+        var activator = new RecordingActivator(locator);
+        var set = $"AddCatalogueToCohortSet CohortAggregateContainer:$c2 Catalogue:{catalogue.ID} \"{catalogue.Name}\" \"{first.GetRuntimeName()}\" false => $a1 $a1.{first.GetRuntimeName()}";
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() =>
+            RebuildWith(activator, Script(CreateLine, set), $"Fails in create {Guid.NewGuid():N}"));
 
         Assert.Multiple(() =>
         {
+            Assert.That(e!.Message, Does.StartWith("Line 3 of the build script").And.Contain("A failure after RDMP saved the object"),
+                "The error should name the create line.");
             Assert.That(e.Message, Does.Contain("was removed"), "The message should say the cohort RDMP saved was removed.");
-            Assert.That(Counts(), Is.EqualTo(before), "The cohort and its three containers should be gone.");
+            Assert.That(CountsIn(repository), Is.EqualTo(counts), "Nothing the line saved should be left, and no later line should have run.");
+            Assert.That(repository.StillExists(bystander), Is.True, "Another cohort should be untouched.");
+            Assert.That(activator.Published, Is.Empty, "A complete clean-up should not refresh RDMP.");
         });
     }
 
@@ -507,7 +531,6 @@ internal class CohortScriptRebuildTests : UnitTests
     /// <summary>An activator that fails at a chosen point, once, to test the rebuild's failure paths.</summary>
     private sealed class FailingActivator : ConsoleInputManager
     {
-        public Type FailOnPublishOf { get; set; }
         public bool FailOnGetDelegates { get; set; }
 
         /// <summary>Runs once when the rebuild starts, after its check: another session acting in between.</summary>
@@ -517,17 +540,6 @@ internal class CohortScriptRebuildTests : UnitTests
             : base(locator, ThrowImmediatelyCheckNotifier.Quiet)
         {
             DisallowInput = true;
-        }
-
-        public override void Publish(Rdmp.Core.MapsDirectlyToDatabaseTable.IMapsDirectlyToDatabaseTable databaseEntity)
-        {
-            if (FailOnPublishOf != null && FailOnPublishOf.IsInstanceOfType(databaseEntity))
-            {
-                FailOnPublishOf = null;
-                throw new InvalidOperationException("A failure after the cohort was saved.");
-            }
-
-            base.Publish(databaseEntity);
         }
 
         public override List<Rdmp.Core.CommandExecution.CommandInvokerDelegate> GetDelegates()
@@ -579,20 +591,22 @@ internal class CohortScriptRebuildTests : UnitTests
         return cic;
     }
 
-    private Dictionary<string, int> Counts() => new()
+    private Dictionary<string, int> Counts() => CountsIn(Repository);
+
+    private static Dictionary<string, int> CountsIn(MemoryDataExportRepository repository) => new()
     {
-        ["cohorts"] = Repository.GetAllObjects<CohortIdentificationConfiguration>().Length,
-        ["containers"] = Repository.GetAllObjects<CohortAggregateContainer>().Length,
-        ["sets"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration>().Length,
-        ["columns"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateDimension>().Length,
-        ["filter containers"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer>().Length,
-        ["filters"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilter>().Length,
-        ["filter parameters"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterParameter>().Length,
-        ["other parameters"] = Repository.GetAllObjects<AnyTableSqlParameter>().Length,
-        ["patient index tables"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfiguration>().Length,
-        ["join uses"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfigurationUse>().Length,
-        ["top x"] = Repository.GetAllObjects<Rdmp.Core.Curation.Data.AggregateTopX>().Length,
-        ["project links"] = Repository.GetAllObjects<ProjectCohortIdentificationConfigurationAssociation>().Length
+        ["cohorts"] = repository.GetAllObjects<CohortIdentificationConfiguration>().Length,
+        ["containers"] = repository.GetAllObjects<CohortAggregateContainer>().Length,
+        ["sets"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateConfiguration>().Length,
+        ["columns"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateDimension>().Length,
+        ["filter containers"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer>().Length,
+        ["filters"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilter>().Length,
+        ["filter parameters"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Aggregation.AggregateFilterParameter>().Length,
+        ["other parameters"] = repository.GetAllObjects<AnyTableSqlParameter>().Length,
+        ["patient index tables"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfiguration>().Length,
+        ["join uses"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.Cohort.Joinables.JoinableCohortAggregateConfigurationUse>().Length,
+        ["top x"] = repository.GetAllObjects<Rdmp.Core.Curation.Data.AggregateTopX>().Length,
+        ["project links"] = repository.GetAllObjects<ProjectCohortIdentificationConfigurationAssociation>().Length
     };
 
     private void RebuildWith(Rdmp.Core.CommandExecution.IBasicActivateItems activator, string text, string name, bool acceptRenamed = false)

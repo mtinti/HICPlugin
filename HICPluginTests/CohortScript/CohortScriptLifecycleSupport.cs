@@ -66,8 +66,7 @@ public abstract partial class CohortScriptLifecycleBase : DatabaseTests
     /// B0, export E0, rebuild B1, export E1, rebuild B2 from E1, and two more rebuilds of E0. Every cohort is reopened
     /// through fresh repositories and checked against the expected rows and B0's saved structure. Objects that
     /// existed before the round trip, B0 among them, must be unchanged afterwards. Without <paramref name="allGenerations"/>
-    /// the round trip stops after the fixed point, with one rebuild instead of four: each rebuild takes seconds,
-    /// because RDMP refreshes all its objects after every line.
+    /// the round trip stops after the fixed point, with one rebuild instead of four, which keeps a test short.
     /// </summary>
     protected ChainResult RoundTrip(int b0Id, string[] expectedRows, Func<string, List<string>> checkB0Structure = null,
         bool allGenerations = true)
