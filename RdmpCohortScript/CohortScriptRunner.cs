@@ -82,13 +82,29 @@ internal sealed class CohortScriptRunner
         _repository = activator.RepositoryLocator.CatalogueRepository;
         _newCohortName = newCohortName;
 
-        // when RDMP and the plugin share a command name, the plugin's command wins
+        _commandTypes = CommandTypes(activator);
+    }
+
+    /// <summary>The class that runs each build script command. When RDMP and the plugin share a name, the plugin's wins.</summary>
+    internal static Dictionary<string, Type> CommandTypes(IBasicActivateItems activator)
+    {
         var plugin = typeof(CohortScriptRunner).Assembly;
-        _commandTypes = new CommandInvoker(activator).GetSupportedCommands()
+        return new CommandInvoker(activator).GetSupportedCommands()
             .Where(t => CohortScriptFormat.Commands.ContainsKey(BasicCommandExecution.GetCommandName(t.Name)))
             .GroupBy(t => BasicCommandExecution.GetCommandName(t.Name))
             .ToDictionary(g => g.Key, g => g.OrderBy(t => t.Assembly == plugin ? 0 : 1).First(), StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// The constructors that can take a line's arguments in order, after the activator, the one RDMP's command line
+    /// uses first.
+    /// </summary>
+    internal static IEnumerable<ConstructorInfo> Constructors(Type type, int arguments) =>
+        type.GetConstructors()
+            .Where(c => c.GetParameters() is { Length: > 0 } p && typeof(IBasicActivateItems).IsAssignableFrom(p[0].ParameterType) &&
+                        p.All(x => x.ParameterType != typeof(CommandLineObjectPicker)) &&
+                        p.Length - 1 >= arguments && p.Skip(1 + arguments).All(x => x.HasDefaultValue))
+            .OrderBy(c => c.GetCustomAttributes(typeof(Rdmp.Core.Repositories.Construction.UseWithObjectConstructorAttribute), false).Any() ? 0 : 1);
 
     public void Run(IEnumerable<ScriptFileLine> lines)
     {
@@ -204,13 +220,7 @@ internal sealed class CohortScriptRunner
 
     private IAtomicCommand Construct(ScriptFileLine line, Type type, ScriptCommandDefinition definition, string[] arguments)
     {
-        var constructors = type.GetConstructors()
-            .Where(c => c.GetParameters() is { Length: > 0 } p && typeof(IBasicActivateItems).IsAssignableFrom(p[0].ParameterType) &&
-                        p.All(x => x.ParameterType != typeof(CommandLineObjectPicker)) &&
-                        p.Length - 1 >= arguments.Length && p.Skip(1 + arguments.Length).All(x => x.HasDefaultValue))
-            .OrderBy(c => c.GetCustomAttributes(typeof(Rdmp.Core.Repositories.Construction.UseWithObjectConstructorAttribute), false).Any() ? 0 : 1);
-
-        foreach (var constructor in constructors)
+        foreach (var constructor in Constructors(type, arguments.Length))
         {
             var parameters = constructor.GetParameters();
             var values = new object[parameters.Length];
@@ -336,6 +346,11 @@ internal sealed class CohortScriptRunner
                 var owner = Get<AggregateConfiguration>(arguments[0]);
                 Bind(handles[0], owner.RootFilterContainer_ID ??
                                  throw Stop(line, CohortScriptRefusal.LineHadNoEffect, $"Set {owner.ID} has no filter container after the line."));
+                break;
+
+            case "UseTopFilterContainer":
+                Bind(handles[0], ((ExecuteCommandUseTopFilterContainer)command).Container?.ID ??
+                                 throw Stop(line, CohortScriptRefusal.LineHadNoEffect, "The set has no top filter container after the line."));
                 break;
 
             case "AddChildFilterContainer":

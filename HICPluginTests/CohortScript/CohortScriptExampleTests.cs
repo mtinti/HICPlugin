@@ -36,6 +36,7 @@ internal class CohortScriptExampleTests : UnitTests
         ["UsePatientIndexTable"] = (3, 0),
         ["AddForcedJoin"] = (3, 0),
         ["AddNewFilterContainer"] = (1, 1),
+        ["UseTopFilterContainer"] = (1, 1),
         ["AddChildFilterContainer"] = (1, 1),
         ["AddCohortFilter"] = (3, 1),
         ["SetText"] = (3, 0),
@@ -91,9 +92,17 @@ internal class CohortScriptExampleTests : UnitTests
     }
 
     [TestCaseSource(nameof(Examples))]
-    public void TheExampleRebuildsAgainstMatchingFixtures(string file)
+    public void TheExampleRebuildsAgainstMatchingFixtures(string file) =>
+        RebuildAgainstFixtures(File.ReadAllText(Path.Join(TestContext.CurrentContext.TestDirectory, "CohortScript", "Examples", file)), file);
+
+    // the reference is what an agent copies, so its examples, taken together, must rebuild
+    [Test]
+    public void TheReferenceExamplesRebuildAgainstMatchingFixtures() =>
+        RebuildAgainstFixtures("cohort-script-format: \"1\"\nCommands:\n" +
+                               string.Concat(CohortScriptReference.Examples.Select(l => $"  - {YamlText.DoubleQuoted(l)}\n")), "reference");
+
+    private void RebuildAgainstFixtures(string text, string file)
     {
-        var text = File.ReadAllText(Path.Join(TestContext.CurrentContext.TestDirectory, "CohortScript", "Examples", file));
         var problems = new List<CohortScriptProblem>();
         var lines = CohortScriptReader.Read(text, problems).Parsed().ToArray();
 

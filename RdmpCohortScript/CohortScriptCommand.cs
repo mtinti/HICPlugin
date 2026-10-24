@@ -262,6 +262,30 @@ public enum CohortScriptRefusal
     /// <summary>Script: a project-specific catalogue is used before the script links the cohort to its project.</summary>
     ProjectNotLinkedInScript,
 
+    /// <summary>
+    /// Script: a filter uses a parameter that no line declares where RDMP gives it to the filter: the cohort, the
+    /// filter's set or one of its filters, or a patient index table the set joins.
+    /// </summary>
+    ParameterNotDeclared,
+
+    /// <summary>Check of an authored script (a warning): a line leaves out a catalogue's mandatory filters.</summary>
+    MandatoryFiltersLeftOut,
+
+    /// <summary>
+    /// Script: AddNewFilterContainer on a set that already has a top filter container, made by an earlier line or
+    /// by copying the catalogue's mandatory filters. UseTopFilterContainer binds the container the set has.
+    /// </summary>
+    TopFilterContainerExists,
+
+    /// <summary>
+    /// Check (a warning): a SetTopX line. RDMP 9.3.0 builds a cohort set's Top X without an ORDER BY, so the
+    /// patients it keeps are not fixed, whatever column the line gives.
+    /// </summary>
+    TopXNotFixed,
+
+    /// <summary>Bulk export: the list of cohorts and folders cannot be used.</summary>
+    BadExportList,
+
     /// <summary>Rebuild: RDMP refused to run a line.</summary>
     LineRefused,
 

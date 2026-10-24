@@ -22,8 +22,19 @@ public sealed class CohortScriptProblemsException : Exception
     public IReadOnlyList<CohortScriptProblem> Problems { get; }
 
     public CohortScriptProblemsException(string file, IReadOnlyList<CohortScriptProblem> problems)
-        : base($"The build script {file} cannot be run. Nothing was built.{Environment.NewLine}" +
-               string.Join(Environment.NewLine, problems))
+        : this(problems, $"The build script {file} cannot be run. Nothing was built.")
+    {
+    }
+
+    /// <summary>
+    /// Lists the problems after a first sentence that says what could not be done, then any warnings.
+    /// </summary>
+    public CohortScriptProblemsException(IReadOnlyList<CohortScriptProblem> problems, string lead,
+        IReadOnlyList<CohortScriptProblem> warnings = null)
+        : base($"{lead}{Environment.NewLine}{string.Join(Environment.NewLine, problems)}" +
+               (warnings is { Count: > 0 }
+                   ? $"{Environment.NewLine}Warnings:{Environment.NewLine}{string.Join(Environment.NewLine, warnings)}"
+                   : ""))
     {
         Problems = problems;
     }
@@ -114,7 +125,7 @@ internal static class CohortScriptReader
 
         if (version == null)
             problems.Add(new CohortScriptProblem(0, CohortScriptRefusal.NotFormat1, sawCommands
-                ? "The file has no cohort-script-format key, so it was written by the June export. Export the cohort again with this plugin."
+                ? "The file has no cohort-script-format key, so an earlier version of the export wrote it, in another format. Export the cohort again with this plugin."
                 : "The file has no cohort-script-format key. A build script starts with cohort-script-format: \"1\"."));
         else if (version != CohortScriptFormat.Version)
             problems.Add(new CohortScriptProblem(0, CohortScriptRefusal.NotFormat1,

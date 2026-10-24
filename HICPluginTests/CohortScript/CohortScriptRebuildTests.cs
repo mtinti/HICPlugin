@@ -70,12 +70,12 @@ internal class CohortScriptRebuildTests : UnitTests
     // ---- the file
 
     [Test]
-    public void AScriptFromTheJuneExportIsRefusedWithAnExplanation()
+    public void AScriptFromAnEarlierExportIsRefusedWithAnExplanation()
     {
         var problems = Check("Commands:\n  - CreateNewCohortIdentificationConfiguration \"Old\" => $c1\n");
 
         Assert.That(problems.Select(p => p.Reason), Has.Member(CohortScriptRefusal.NotFormat1));
-        Assert.That(problems.Single(p => p.Reason == CohortScriptRefusal.NotFormat1).Message, Does.Contain("June export"));
+        Assert.That(problems.Single(p => p.Reason == CohortScriptRefusal.NotFormat1).Message, Does.Contain("earlier version of the export"));
     }
 
     [Test]
@@ -403,7 +403,9 @@ internal class CohortScriptRebuildTests : UnitTests
         var script = Script(CreateLine, SetLine("\"Its old name\""));
         var name = $"Renamed {Guid.NewGuid():N}";
 
-        Assert.That(() => Rebuild(script, name), Throws.TypeOf<CohortScriptProblemsException>());
+        // the message's remedy is the option this test then applies
+        Assert.That(() => Rebuild(script, name), Throws.TypeOf<CohortScriptProblemsException>()
+            .With.Message.Contains("acceptRenamedObjects true"));
 
         RebuildWith(new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true },
             script, name, acceptRenamed: true);

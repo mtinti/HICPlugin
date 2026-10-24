@@ -99,6 +99,8 @@ internal static class CohortScriptFormat
                 Reference: new ExistingReference(1, 2, "TableInfo")),
             ["AddNewFilterContainer"] = new("AddNewFilterContainer",
                 new[] { H("AggregateConfiguration") }, new[] { HandleRole.FilterContainer }),
+            ["UseTopFilterContainer"] = new("UseTopFilterContainer",
+                new[] { H("AggregateConfiguration") }, new[] { HandleRole.FilterContainer }),
             ["AddChildFilterContainer"] = new("AddChildFilterContainer",
                 new[] { H("AggregateFilterContainer") }, new[] { HandleRole.FilterContainer }),
             ["AddCohortFilter"] = new("AddCohortFilter",

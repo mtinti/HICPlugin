@@ -324,6 +324,72 @@ public class CohortScriptPatientTests : DatabaseTests
         AssertRebuildReturnsSamePatients(db, cic, new[] { P(1) });
     }
 
+    [Test]
+    public void AFilterUsingItsPatientIndexTablesParameterReturnsTheSamePatients()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var admissions = Import(db, Table("cs_pit_parameter_admissions", new[] { "chi", "admission_date" }, new[]
+        {
+            new object[] { P(1), "2019-01-01" }, // before @since, so not in the patient index table
+            new object[] { P(2), "2021-01-01" }
+        }));
+        var prescribing = Import(db, Table("cs_pit_parameter_prescribing", new[] { "chi", "prescribed_date" }, new[]
+        {
+            new object[] { P(1), "2021-06-01" },
+            new object[] { P(2), "2021-06-01" }
+        }));
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, "Patient check, parameter of a patient index table");
+        cic.CreateRootContainerIfNotExists();
+        var pit = new AggregateConfiguration(CatalogueRepository, admissions, "Admissions") { CountSQL = null };
+        pit.SaveToDatabase();
+        foreach (var ei in admissions.GetAllExtractionInformation(ExtractionCategory.Any)
+                     .Where(e => e.GetRuntimeName() is "chi" or "admission_date"))
+            _ = new AggregateDimension(CatalogueRepository, ei, pit);
+        cic.EnsureNamingConvention(pit);
+        var joinable = new JoinableCohortAggregateConfiguration(CatalogueRepository, cic, pit);
+        new AnyTableSqlParameter(CatalogueRepository, pit, "DECLARE @since AS date") { Value = "'2020-01-01'" }.SaveToDatabase();
+        var pitFilters = new AggregateFilterContainer(CatalogueRepository, FilterContainerOperation.AND);
+        pit.RootFilterContainer_ID = pitFilters.ID;
+        pit.SaveToDatabase();
+        new AggregateFilter(CatalogueRepository, "Recent admissions", pitFilters) { WhereSQL = "admission_date >= @since" }.SaveToDatabase();
+
+        // the set's filter uses @since, which RDMP declares once for the set and the table it joins
+        var set = AddSet(cic, cic.RootCohortAggregateContainer, prescribing, 0);
+        var use = joinable.AddUser(set);
+        use.JoinType = ExtractionJoinType.Inner;
+        use.SaveToDatabase();
+        AddFilter(set, "Prescribed after a recent admission",
+            $"prescribed_date >= @since AND prescribed_date >= ix{joinable.ID}.admission_date");
+
+        AssertRebuildReturnsSamePatients(db, cic, new[] { P(2) });
+    }
+
+    [Test]
+    public void TwoFiltersSharingOneFiltersParameterReturnTheSamePatients()
+    {
+        var db = GetCleanedServer(DatabaseType.MicrosoftSQLServer);
+        var prescribing = Import(db, Table("cs_shared_parameter", new[] { "chi", "drug" }, new[]
+        {
+            new object[] { P(1), "A" },
+            new object[] { P(2), "B" }
+        }));
+
+        var cic = new CohortIdentificationConfiguration(CatalogueRepository, "Patient check, parameter shared by two filters");
+        cic.CreateRootContainerIfNotExists();
+        var set = AddSet(cic, cic.RootCohortAggregateContainer, prescribing, 0);
+
+        // @drug is declared on the second filter only. RDMP declares the parameters of all of a set's filters in
+        // one query, so the first filter may use it too.
+        AddFilter(set, "Uses the drug", "drug = @drug");
+        var declaring = AddFilter(set, "Declares the drug", "chi IS NOT NULL OR drug = @drug");
+        var drug = (AggregateFilterParameter)declaring.GetFilterFactory().CreateNewParameter(declaring, "DECLARE @drug AS varchar(5)");
+        drug.Value = "'A'";
+        drug.SaveToDatabase();
+
+        AssertRebuildReturnsSamePatients(db, cic, new[] { P(1) });
+    }
+
     private void AssertRebuildReturnsSamePatients(DiscoveredDatabase db, CohortIdentificationConfiguration original,
         string[] expected, Action betweenExportAndRebuild = null)
     {

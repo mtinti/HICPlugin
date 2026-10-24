@@ -52,31 +52,17 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
             }
         }
 
-        // both files are made before anything is written, so a cohort the format cannot carry leaves no files
-        var script = new BuildScriptWriter(_cic, BasicActivator.RepositoryLocator).Document();
-        var manifest = new CatalogueManifestWriter(BasicActivator.RepositoryLocator).ForCohort(_cic);
-
+        var files = new CohortExportFiles(_cic, BasicActivator.RepositoryLocator);
         var dir = new DirectoryInfo(Path.Join(outDir.FullName, Sanitise(_cic.Name)));
-        var scriptPath = Path.Join(dir.FullName, "build.script.yaml");
-        var manifestPath = Path.Join(dir.FullName, "catalogue-manifest.yaml");
 
         // the command line replaces an earlier export without asking, so scripts can re-export
-        if (BasicActivator.IsInteractive && (File.Exists(scriptPath) || File.Exists(manifestPath)) &&
+        if (BasicActivator.IsInteractive && CohortExportFiles.WouldReplace(dir) &&
             !BasicActivator.YesNo(
                 $"The folder {dir.FullName} already holds an export of this cohort. Replace its build script and catalogue manifest? The requirement file is kept.",
                 "Replace export"))
             return;
 
-        dir.Create();
-
-        // the requirement is written by hand from the request; the cohort's description is often unrelated to it
-        var requirementPath = Path.Join(dir.FullName, "requirement.md");
-        if (!File.Exists(requirementPath))
-            File.WriteAllText(requirementPath, $"<!-- Write the requirement for '{_cic.Name}' here. -->\n");
-
-        File.WriteAllText(scriptPath, script);
-        File.WriteAllText(manifestPath, manifest);
-
+        files.WriteTo(dir);
         BasicActivator.Show($"Exported cohort {_cic.ID} \"{_cic.Name}\" to {dir.FullName}");
     }
 

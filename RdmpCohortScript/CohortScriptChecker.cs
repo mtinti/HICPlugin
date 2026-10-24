@@ -1,11 +1,14 @@
 // Checks a build script before anything is built, and collects every problem rather than stopping at the first.
 // Offline checks need no RDMP: commands, argument counts, handles and their roles, Set and Delete on handles only,
-// allowed properties. Instance checks read the platform: every existing object a line names exists and still has
-// the name the script gives, and the new cohort's name is free.
+// allowed properties, and every parameter a filter uses declared where RDMP gives it to the filter. Instance
+// checks read the platform: every existing object a line names exists and still has the name the script gives, and
+// the new cohort's name is free. For a script written by a person or an agent rather than exported, the check also
+// warns when a line leaves out a catalogue's mandatory filters, because a new cohort normally needs them.
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FAnsi.Discovery;
 using Rdmp.Core.Curation.Data;
 using Rdmp.Core.Curation.Data.Cohort;
 using Rdmp.Core.DataExport.Data;
@@ -22,17 +25,39 @@ internal sealed class CohortScriptChecker
     private readonly Dictionary<string, HandleRole> _created = new(StringComparer.Ordinal);
     private readonly HashSet<int> _linkedProjects = new();
 
-    private readonly bool _acceptRenamed;
+    // the sets that have a top filter container: from a filter container line, or from the mandatory filters a set
+    // line copies
+    private readonly HashSet<string> _hasTopFilterContainer = new(StringComparer.Ordinal);
 
-    /// <summary>Renamed objects reported instead of refused, when the option to accept them is on.</summary>
+    // for the parameter check: the set each filter container and filter belongs to, the set of each patient index
+    // table, the patient index tables each set joins, the parameters each owner declares, and the filters with the
+    // SQL they use
+    private readonly Dictionary<string, string> _setOf = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _setOfJoinable = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<string>> _joinedBy = new(StringComparer.Ordinal);
+    private readonly HashSet<(string Owner, string Name)> _declared = new();
+
+    // the cohort's parameters declared so far, as written: RDMP does not copy a mandatory filter's parameter that the
+    // cohort already declares
+    private readonly List<string> _cohortParameters = new();
+    private readonly List<(int FileLine, string Filter, string Name, string Sql)> _filters = new();
+
+    private readonly bool _acceptRenamed;
+    private readonly bool _authored;
+
+    /// <summary>
+    /// Points worth a look that do not stop a rebuild: renamed objects, when the option to accept them is on, a Top X,
+    /// whose patients are not fixed, and mandatory filters left out of an authored script.
+    /// </summary>
     public List<CohortScriptProblem> Warnings { get; } = new();
 
     public CohortScriptChecker(IRDMPPlatformRepositoryServiceLocator locator, List<CohortScriptProblem> problems,
-        bool acceptRenamed = false)
+        bool acceptRenamed = false, bool authored = false)
     {
         _locator = locator;
         _problems = problems;
         _acceptRenamed = acceptRenamed;
+        _authored = authored;
     }
 
     public void Check(IReadOnlyList<ScriptFileLine> lines, string newCohortName)
@@ -50,6 +75,8 @@ internal sealed class CohortScriptChecker
 
         foreach (var line in parsed)
             CheckLine(line, line == parsed[0]);
+
+        CheckParametersDeclared();
 
         if (!string.IsNullOrWhiteSpace(newCohortName) && _locator.CatalogueRepository
                 .GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", newCohortName).Any())
@@ -80,6 +107,12 @@ internal sealed class CohortScriptChecker
         for (var i = 0; i < l.Arguments.Count; i++)
             CheckArgument(line, definition, i);
 
+        // the rebuild reads the flag with bool.Parse, which also takes TRUE, but this check compares the text, so
+        // only the two spellings the export writes are allowed
+        if (ImportArgument(l) is { Quoted: false, IsNull: false } import && import.Text is not ("true" or "false"))
+            Problem(line.FileLine, CohortScriptRefusal.WrongArgumentKind,
+                $"The last argument of {l.Command} copies the catalogue's mandatory filters or not. Write true or false, in lower case, not {import.Text}.");
+
         if (definition.Reference is { } reference)
             CheckReference(line, reference);
 
@@ -87,6 +120,141 @@ internal sealed class CohortScriptChecker
             CheckSet(line, l.Command == "Set" ? CohortScriptFormat.WordProperties : CohortScriptFormat.TextProperties);
 
         CheckOutputs(line, definition);
+        CheckTopFilterContainer(line);
+        RecordForParameters(line);
+
+        // the column to order by is kept for the set's graph; the cohort query has no ORDER BY
+        if (l.Command == "SetTopX")
+            Warnings.Add(new CohortScriptProblem(line.FileLine, CohortScriptRefusal.TopXNotFixed,
+                "RDMP 9.3.0 builds a cohort set's Top X without an ORDER BY, so the patients it keeps are not fixed, and a rebuild may return other patients. The column to order by is kept for the set's graph and does not change this."));
+    }
+
+    // the parameters the copies of the mandatory filters get, by RDMP 9.3.0's rules (ParameterCreator.CreateAll):
+    // only those a filter's SQL uses and the cohort does not declare, in the order RDMP copies the filters, with a
+    // number added to a name that an earlier copy already has (@code, then @code2). A saved parameter that the SQL
+    // no longer uses is not copied.
+    private IEnumerable<string> CopiedParameterNames(IEnumerable<ExtractionFilter> mandatory)
+    {
+        var earlier = new List<string>();
+        foreach (var filter in mandatory)
+        {
+            var required = QuerySyntaxHelper.GetAllParameterNamesFromQuery(filter.WhereSQL);
+            foreach (var global in _cohortParameters)
+                required.Remove(global);
+
+            // RDMP compares with the parameters of the copies made before this one, not with this copy's own
+            var inScope = earlier.ToArray();
+            foreach (var name in required)
+            {
+                var proposed = name;
+                if (inScope.Contains(proposed))
+                {
+                    var number = 2;
+                    while (inScope.Contains(proposed + number))
+                        number++;
+                    proposed += number;
+                }
+
+                earlier.Add(proposed);
+            }
+        }
+
+        return earlier;
+    }
+
+    // the argument that says whether a set line copies the catalogue's mandatory filters, or null for other lines
+    private static ScriptArgument ImportArgument(ScriptLine line) => line.Command switch
+    {
+        "AddCatalogueToCohortSet" => line.Arguments[4],
+        "AddPatientIndexTable" => line.Arguments[5],
+        _ => null
+    };
+
+    // a set has one top filter container. RDMP makes it when a set line copies mandatory filters, and
+    // AddNewFilterContainer then fails, so the script binds that one with UseTopFilterContainer.
+    private void CheckTopFilterContainer(ScriptFileLine line)
+    {
+        var l = line.Parsed;
+        if (l.Command is not ("AddNewFilterContainer" or "UseTopFilterContainer") || HandleIn(l.Arguments[0]) is not { } set)
+            return;
+
+        if (!_hasTopFilterContainer.Add(set) && l.Command == "AddNewFilterContainer")
+            Problem(line.FileLine, CohortScriptRefusal.TopFilterContainerExists,
+                $"Set {set} already has a top filter container, made by an earlier line or with the catalogue's mandatory filters. Use UseTopFilterContainer AggregateConfiguration:{set} instead, which binds the container the set has.");
+    }
+
+    // a handle argument, or null when the argument is not a well-formed handle (the argument check reports that)
+    private static string HandleIn(ScriptArgument argument) =>
+        !argument.Quoted && !argument.IsNull && CohortScriptFormat.TrySplitTyped(argument.Text, out _, out var rest) &&
+        rest.StartsWith('$')
+            ? rest
+            : null;
+
+    private void RecordForParameters(ScriptFileLine line)
+    {
+        var l = line.Parsed;
+        var target = HandleIn(l.Arguments[0]);
+        if (target == null)
+            return;
+
+        switch (l.Command)
+        {
+            case "AddNewFilterContainer" or "UseTopFilterContainer" when l.Handles.Count == 1:
+                _setOf[l.Handles[0]] = target;
+                break;
+            case "AddPatientIndexTable" when l.Handles.Count >= 2:
+                _setOfJoinable[l.Handles[1]] = l.Handles[0];
+                break;
+            case "UsePatientIndexTable" when HandleIn(l.Arguments[1]) is { } joinable:
+                if (!_joinedBy.TryGetValue(target, out var joined))
+                    _joinedBy[target] = joined = new List<string>();
+                joined.Add(joinable);
+                break;
+            case "AddChildFilterContainer" when l.Handles.Count == 1 && _setOf.TryGetValue(target, out var parentSet):
+                _setOf[l.Handles[0]] = parentSet;
+                break;
+            case "AddCohortFilter" when l.Handles.Count == 1:
+                if (_setOf.TryGetValue(target, out var set))
+                    _setOf[l.Handles[0]] = set;
+                if (!l.Arguments[2].IsNull)
+                    _filters.Add((line.FileLine, l.Handles[0], l.Arguments[1].Text, l.Arguments[2].Text));
+                break;
+            case "AddCohortParameter" when !l.Arguments[1].IsNull:
+                _declared.Add((target, l.Arguments[1].Text.ToLowerInvariant()));
+                if (CohortScriptFormat.RoleOf(target) == HandleRole.Cohort)
+                    _cohortParameters.Add(l.Arguments[1].Text);
+                break;
+        }
+    }
+
+    // SQL Server compares parameter names without case, so the check does too. RDMP declares, in one query, the
+    // parameters of the cohort, of the set, of every filter of the set, and of each patient index table the set
+    // joins (its set and its filters), so a filter sees all of them. A parameter of another set is declared only
+    // when the whole cohort runs, and a set run alone fails on it, so it does not count.
+    private void CheckParametersDeclared()
+    {
+        var cohortHandles = _created.Where(kv => kv.Value == HandleRole.Cohort).Select(kv => kv.Key).ToArray();
+        foreach (var (fileLine, filter, name, sql) in _filters)
+        {
+            var owners = new HashSet<string>(cohortHandles, StringComparer.Ordinal) { filter };
+            if (_setOf.TryGetValue(filter, out var set))
+            {
+                var sets = new List<string> { set };
+                if (_joinedBy.TryGetValue(set, out var joinables))
+                    sets.AddRange(joinables.Where(_setOfJoinable.ContainsKey).Select(j => _setOfJoinable[j]));
+                foreach (var s in sets)
+                {
+                    owners.Add(s);
+                    // the filters of the set (and its filter containers, which declare nothing)
+                    owners.UnionWith(_setOf.Where(kv => kv.Value == s).Select(kv => kv.Key));
+                }
+            }
+
+            foreach (var parameter in SqlText.ParameterNames(sql).Distinct(StringComparer.OrdinalIgnoreCase))
+                if (!owners.Any(o => _declared.Contains((o, parameter.ToLowerInvariant()))))
+                    Problem(fileLine, CohortScriptRefusal.ParameterNotDeclared,
+                        $"Filter \"{name}\" ({filter}) uses {parameter}, but no line declares it. Add an AddCohortParameter line for {parameter} on the cohort, on the filter's set or one of its filters, or on a patient index table the set joins.");
+        }
     }
 
     // every argument is checked by what its position holds, whatever its quoting
@@ -196,10 +364,10 @@ internal sealed class CohortScriptChecker
         }
 
         var current = ((INamed)existing).Name;
-        var mismatch = ExistingObjectName.Mismatch(reference.TypeName, existing, current, nameArgument.Text);
+        var mismatch = ExistingObjectName.Mismatch(reference.TypeName, existing, current, nameArgument.Text, inBuildScript: true);
         if (mismatch != null && _acceptRenamed)
             Warnings.Add(new CohortScriptProblem(line.FileLine, CohortScriptRefusal.NameMismatch,
-                $"{reference.TypeName} {id} was renamed from \"{nameArgument.Text}\" to \"{current}\"; the rebuild uses it, as asked."));
+                $"{reference.TypeName} {id} was renamed from \"{nameArgument.Text}\" to \"{current}\". The rebuild uses it, as asked."));
         else if (mismatch != null)
             Problem(line.FileLine, CohortScriptRefusal.NameMismatch, mismatch);
 
@@ -235,6 +403,21 @@ internal sealed class CohortScriptChecker
                         $"Column \"{name}\" is listed twice, or is an identifier column. A patient index table has one identifier column and each other column once.");
             }
         }
+
+        // an exported script always leaves them out, because the saved filters are written as they are. When the line
+        // copies them, RDMP makes the set's top filter container, and the copies bring their parameters, which the
+        // set's other filters see like any filter's
+        var importArgument = ImportArgument(line.Parsed);
+        var mandatory = catalogue.GetAllMandatoryFilters();
+        if (importArgument.Text == "true" && mandatory.Length > 0 && line.Parsed.Handles.Count > 0)
+        {
+            _hasTopFilterContainer.Add(line.Parsed.Handles[0]);
+            foreach (var name in CopiedParameterNames(mandatory))
+                _declared.Add((line.Parsed.Handles[0], name.ToLowerInvariant()));
+        }
+        if (_authored && importArgument.Text == "false" && mandatory.Length > 0)
+            Warnings.Add(new CohortScriptProblem(line.FileLine, CohortScriptRefusal.MandatoryFiltersLeftOut,
+                $"Catalogue {catalogue.ID} \"{catalogue.Name}\" has mandatory filters ({string.Join(", ", mandatory.Select(f => $"\"{f.Name}\""))}), but the line leaves them out. A new cohort normally needs them: write true as the last argument."));
 
         var dataExport = _locator.DataExportRepository;
         if (dataExport == null)

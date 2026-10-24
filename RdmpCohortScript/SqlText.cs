@@ -4,6 +4,7 @@
 // may nest). In user SQL the alias is always the qualifier of a column, ix7.admission_date, so the scanner marks
 // a name only when a dot follows it and no dot comes before it: source.ix7 is a column, not the alias. The name
 // may be bare, [ix7] or "ix7", in any case (SQL Server usually ignores case); its delimiters and letters are kept.
+// The same scanner finds the parameters a filter uses, so an @name inside a literal or a comment is not counted.
 
 using System;
 using System.Collections.Generic;
@@ -11,7 +12,7 @@ using System.Text;
 
 namespace RdmpCohortScript;
 
-/// <summary>Marks the ix&lt;joinable id&gt; alias in SQL for a build script.</summary>
+/// <summary>Reads SQL text for a build script: marks the ix&lt;joinable id&gt; alias, and finds the parameters it uses.</summary>
 internal static class SqlText
 {
     /// <summary>
@@ -63,6 +64,45 @@ internal static class SqlText
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The parameter names (@name) the SQL uses outside literals, quoted names and comments. A name with two @,
+    /// such as @@ROWCOUNT, is SQL Server's own and is left out.
+    /// </summary>
+    public static IEnumerable<string> ParameterNames(string sql)
+    {
+        if (string.IsNullOrEmpty(sql))
+            yield break;
+
+        var skipped = new StringBuilder();
+        var i = 0;
+        while (i < sql.Length)
+        {
+            var c = sql[i];
+            if (c == '\'')
+                i = CopyQuoted(sql, i, '\'', '\'', skipped);
+            else if (c is '[' or '"')
+                i = CopyQuoted(sql, i, c, c == '[' ? ']' : '"', skipped);
+            else if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
+                i = CopyLineComment(sql, i, skipped);
+            else if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
+                i = CopyBlockComment(sql, i, skipped);
+            else if (IsWordChar(c))
+            {
+                var start = i;
+                while (i < sql.Length && IsWordChar(sql[i]))
+                    i++;
+
+                var word = sql[start..i];
+                if (word.Length > 1 && word[0] == '@' && word[1] != '@')
+                    yield return word;
+            }
+            else
+            {
+                i++;
+            }
+        }
     }
 
     // name is ix<one of the ids>, in any case, with a dot after it (spaces allowed) and no dot before it

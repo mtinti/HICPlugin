@@ -15,13 +15,17 @@ internal static class ExistingObjectName
     /// message that names the object, its current name, the name in the script, and what to do.
     /// </summary>
     public static string Mismatch(string kind, IMapsDirectlyToDatabaseTable existing, string currentName,
-        string expectedName)
+        string expectedName, bool inBuildScript = false)
     {
         if (expectedName == null || string.Equals(currentName, expectedName, StringComparison.Ordinal))
             return null;
 
+        // a build script must give every name, so its remedy is the option that accepts renamed objects
+        var remedy = inBuildScript
+            ? "or rebuild with the option that accepts renamed objects (acceptRenamedObjects true)."
+            : "or give null instead of the name to skip this check.";
         return $"The script names {kind} {existing.ID} \"{expectedName}\", but {kind} {existing.ID} is called " +
                $"\"{currentName}\". Check that the id is right. If the {kind} was renamed, correct the name in the " +
-               "script, or give null instead of the name to skip this check.";
+               $"script, {remedy}";
     }
 }
