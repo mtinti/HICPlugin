@@ -167,5 +167,44 @@ public enum CohortScriptRefusal
     BadRowCount,
 
     /// <summary>The order-by column belongs to another set.</summary>
-    OrderByOtherSet
+    OrderByOtherSet,
+
+    /// <summary>Export: the cohort has no root container.</summary>
+    NoRootContainer,
+
+    /// <summary>Export: a set that is not a patient index table has a count column.</summary>
+    CountColumnOnSet,
+
+    /// <summary>Export: a set selects columns other than its identifier column.</summary>
+    ExtraColumnsOnSet,
+
+    /// <summary>Export: a patient index table column name contains a comma.</summary>
+    CommaInColumnName,
+
+    /// <summary>Export: a column name cannot be part of a handle, because it contains a space, a quote or a dot.</summary>
+    ColumnNameNotUsableInHandle,
+
+    /// <summary>Export: a set has a pivot.</summary>
+    PivotOnSet,
+
+    /// <summary>Export: a set has a date axis.</summary>
+    DateAxisOnSet,
+
+    /// <summary>Export: a set's column is no longer in its catalogue.</summary>
+    DimensionWithoutColumn,
+
+    /// <summary>Export: SQL already contains the text {$, which the script uses for markers.</summary>
+    MarkerTextInSql,
+
+    /// <summary>Export: a set has more than one identifier column.</summary>
+    TooManyIdentifierColumns,
+
+    /// <summary>Export: a patient index table uses one catalogue column for two of its outputs.</summary>
+    RepeatedSourceColumn,
+
+    /// <summary>Export: a set's name still starts with cic_ after RDMP's prefix is removed.</summary>
+    SetNameLooksPrefixed,
+
+    /// <summary>A patient index table cannot itself join a patient index table.</summary>
+    JoinFromAPatientIndexTable
 }

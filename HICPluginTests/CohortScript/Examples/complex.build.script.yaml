@@ -1,0 +1,81 @@
+# A cohort that uses every feature the format covers.
+# Root EXCEPT: Inclusion Criteria (INTERSECT) minus "Optional extras" (UNION, a renamed sub-container).
+# The original has no Exclusion Criteria container, so the automatic one is deleted.
+# Covers: project link and a project-specific catalogue, cohort and set parameters, a patient index table with
+# extra columns, a dimension alias and qualified SQL, a count column, a join use with the {$j} marker in filter
+# SQL, a forced join, nested AND/OR filter containers, HAVING, a catalogue with two identifier columns used
+# through its second one, disabled filter / filter container / set / container, Delete, child order,
+# cohort description, ticket and folder, a renamed set with a description, a filter description, GroupBy.
+cohort-script-format: "1"
+exported-from:
+  cohort-id: "102"
+  cohort-name: "Complex feature test"
+  rdmp-version: "9.3.0"
+  plugin-version: "1.0.0"
+Commands:
+  - "CreateNewCohortIdentificationConfiguration \"Complex feature test\" => $cic102 $c211 $c212 $c213"
+  - "LinkCohortToProject CohortIdentificationConfiguration:$cic102 Project:5 \"Test project\""
+  - "Set CohortIdentificationConfiguration:$cic102 Description \"Uses every feature of format 1.\nTwo lines.\""
+  - "Set CohortIdentificationConfiguration:$cic102 Ticket \"TEST-1\""
+  - "Set CohortIdentificationConfiguration:$cic102 Folder \"\\tests\\features\""
+  - "AddCohortParameter CohortIdentificationConfiguration:$cic102 \"@studyStart\" \"DECLARE @studyStart AS date\" \"'2015-01-01'\" \"Start of the study window\""
+  # patient index table: each patient's latest admission (MAX, not grouped, aliased) and a count of admissions
+  - "AddPatientIndexTable CohortIdentificationConfiguration:$cic102 Catalogue:21 \"CX_Admissions\" chi \"admission_date\" false => $a311 $j601 $a311.chi $a311.admission_date"
+  - "Set AggregateDimension:$a311.chi SelectSQL \"[CX_Data]..[CX_Admissions].[chi]\""
+  - "Set AggregateDimension:$a311.admission_date SelectSQL \"MAX([CX_Data]..[CX_Admissions].[admission_date])\""
+  - "Set AggregateDimension:$a311.admission_date Alias \"event_date\""
+  - "Set AggregateDimension:$a311.admission_date GroupBy false"
+  - "Set AggregateConfiguration:$a311 CountSQL \"count(*) AS admissions\""
+  - "AddNewFilterContainer AggregateConfiguration:$a311 => $fc411"
+  - "CreateNewFilter AggregateFilterContainer:$fc411 \"After study start\" \"admission_date >= @studyStart\" => $f511"
+  # the tree
+  - "Set CohortAggregateContainer:$c211 Operation EXCEPT"
+  - "Set CohortAggregateContainer:$c211 Name \"Root Container\""
+  - "Set CohortAggregateContainer:$c212 Operation INTERSECT"
+  - "Set CohortAggregateContainer:$c212 Name \"Inclusion Criteria\""
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c212 Catalogue:22 \"CX_Prescribing\" chi false => $a312 $a312.chi"
+  - "RenameCohortSet AggregateConfiguration:$a312 \"Prescribed near an admission\""
+  - "Set AggregateConfiguration:$a312 Description \"At least two prescriptions within @window days of an admission\""
+  - "UsePatientIndexTable AggregateConfiguration:$a312 JoinableCohortAggregateConfiguration:$j601 Inner"
+  - "Set AggregateDimension:$a312.chi SelectSQL \"[CX_Data]..[CX_Prescribing].[chi]\""
+  - "AddForcedJoin AggregateConfiguration:$a312 TableInfo:31 \"[CX_Data]..[CX_DrugLookup]\""
+  - "AddCohortParameter AggregateConfiguration:$a312 \"@window\" \"DECLARE @window AS int\" \"90\" null"
+  - "Set AggregateConfiguration:$a312 HavingSQL \"count(*) >= 2\""
+  - "AddNewFilterContainer AggregateConfiguration:$a312 => $fc412"
+  - "CreateNewFilter AggregateFilterContainer:$fc412 \"Within window of an admission\" \"prescribed_date BETWEEN ix{$j601}.event_date AND DATEADD(day, @window, ix{$j601}.event_date)\" => $f512"
+  - "AddChildFilterContainer AggregateFilterContainer:$fc412 => $fc413"
+  - "Set AggregateFilterContainer:$fc413 Operation OR"
+  - "CreateNewFilter AggregateFilterContainer:$fc413 \"Metformin\" \"drug_name = 'Metformin'\" => $f513"
+  - "CreateNewFilter AggregateFilterContainer:$fc413 \"Insulin\" \"drug_name LIKE 'Insulin%'\" => $f514"
+  - "Set AggregateFilter:$f514 Description \"Any insulin product\""
+  - "AddChildFilterContainer AggregateFilterContainer:$fc412 => $fc414"
+  - "CreateNewFilter AggregateFilterContainer:$fc414 \"Old rule, kept but off\" \"prescribed_date < '2000-01-01'\" => $f515"
+  # a catalogue with two identifier columns, used through the second one; project-specific to project 5
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c212 Catalogue:23 \"CX_Maternity\" mother_chi false => $a313 $a313.mother_chi"
+  - "AddNewFilterContainer AggregateConfiguration:$a313 => $fc415"
+  - "CreateNewFilter AggregateFilterContainer:$fc415 \"Delivered\" \"outcome = 'Delivered'\" => $f516"
+  - "Delete CohortAggregateContainer:$c213"
+  - "AddCohortSubContainer CohortAggregateContainer:$c211 => $c214"
+  - "Set CohortAggregateContainer:$c214 Operation UNION"
+  - "Set CohortAggregateContainer:$c214 Name \"Optional extras\""
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c214 Catalogue:24 \"CX_Demography\" chi false => $a314 $a314.chi"
+  - "AddNewFilterContainer AggregateConfiguration:$a314 => $fc416"
+  - "CreateNewFilter AggregateFilterContainer:$fc416 \"Has died\" \"date_of_death IS NOT NULL\" => $f517"
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c214 Catalogue:21 \"CX_Admissions\" chi false => $a315 $a315.chi"
+  - "AddCohortSubContainer CohortAggregateContainer:$c214 => $c215"
+  - "Set CohortAggregateContainer:$c215 Operation UNION"
+  - "Set CohortAggregateContainer:$c215 Name \"Switched off branch\""
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c215 Catalogue:22 \"CX_Prescribing\" chi false => $a316 $a316.chi"
+  # order of children
+  - "Set AggregateConfiguration:$a312 Order 0"
+  - "Set AggregateConfiguration:$a313 Order 1"
+  - "Set AggregateConfiguration:$a314 Order 0"
+  - "Set AggregateConfiguration:$a315 Order 1"
+  - "Set CohortAggregateContainer:$c215 Order 2"
+  - "Set CohortAggregateContainer:$c212 Order 0"
+  - "Set CohortAggregateContainer:$c214 Order 1"
+  # disabled state last
+  - "Set AggregateFilter:$f515 IsDisabled true"
+  - "Set AggregateFilterContainer:$fc414 IsDisabled true"
+  - "Set AggregateConfiguration:$a315 IsDisabled true"
+  - "Set CohortAggregateContainer:$c215 IsDisabled true"

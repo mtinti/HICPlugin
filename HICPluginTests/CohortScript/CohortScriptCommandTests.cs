@@ -250,6 +250,18 @@ internal class CohortScriptCommandTests : UnitTests
     }
 
     [Test]
+    public void UsePatientIndexTableRefusesAPatientIndexTableAsTheJoiningSet()
+    {
+        var first = AddPatientIndexTable(_cic);
+        var second = AddPatientIndexTable(_cic);
+
+        var result = Run("UsePatientIndexTable", $"AggregateConfiguration:{second.AggregateConfiguration_ID}",
+            $"JoinableCohortAggregateConfiguration:{first.ID}", "Inner");
+
+        AssertRefused(result, CohortScriptRefusal.JoinFromAPatientIndexTable);
+    }
+
+    [Test]
     public void UsePatientIndexTableRefusesASecondTableForTheSameSet()
     {
         var first = AddPatientIndexTable(_cic);

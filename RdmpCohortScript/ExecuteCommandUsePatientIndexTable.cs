@@ -38,6 +38,13 @@ public class ExecuteCommandUsePatientIndexTable : CohortScriptCommand
         if (RefuseIfReadOnly(set, $"set {set.ID}"))
             return;
 
+        if (set.IsJoinablePatientIndexTable() && joinable.AggregateConfiguration_ID != set.ID)
+        {
+            Refuse(CohortScriptRefusal.JoinFromAPatientIndexTable,
+                $"Set {set.ID} is itself a patient index table, and RDMP does not let a patient index table join another one.");
+            return;
+        }
+
         if (joinable.AggregateConfiguration_ID == set.ID)
         {
             Refuse(CohortScriptRefusal.JoinsItself, $"Set {set.ID} is the patient index table itself, so it cannot join it.");

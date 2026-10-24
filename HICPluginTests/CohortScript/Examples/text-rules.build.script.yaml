@@ -1,0 +1,31 @@
+# One cohort whose text hits every rule of sections 3, 4, 5 and 9 of COHORT-SCRIPT-FORMAT.md.
+# Each line's comment names the rule. A round trip must give back every value unchanged.
+cohort-script-format: "1"
+exported-from:
+  cohort-id: "103"
+  cohort-name: "Text rules: quotes, # and new lines"
+  rdmp-version: "9.3.0"
+  plugin-version: "1.0.0"
+Commands:
+  - "CreateNewCohortIdentificationConfiguration \"Text rules: quotes, # and new lines\" => $cic103 $c221 $c222 $c223"   # colon-space and # in a name
+  - "Set CohortAggregateContainer:$c221 Operation EXCEPT"
+  - "Set CohortAggregateContainer:$c221 Name \"Root Container\""
+  - "Set CohortAggregateContainer:$c222 Operation UNION"
+  - "Set CohortAggregateContainer:$c222 Name \"Inclusion Criteria\""
+  - "Delete CohortAggregateContainer:$c223"
+  - "AddCatalogueToCohortSet CohortAggregateContainer:$c222 Catalogue:41 \"Lab, results*: v2\" chi false => $a321 $a321.chi"   # comma, * and colon in a name
+  - "AddNewFilterContainer AggregateConfiguration:$a321 => $fc421"
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Hash sign\" \"notes NOT LIKE '%#tmp%' AND ward <> '#2'\" => $f521"   # space then # inside SQL
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Colon\" \"comment = 'note: urgent'\" => $f522"   # colon then space inside SQL
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Tab\" \"code =\t'A1'\" => $f523"   # a tab inside SQL
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Double quote\" \"label = 'say \"\"hi\"\"'\" => $f524"   # a double quote inside SQL, doubled
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"LF in literal\" \"address = 'line one\nline two'\" => $f525"   # LF inside a string literal
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"CRLF in literal\" \"address = 'line one\r\nline two'\" => $f526"   # CRLF inside a string literal
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Multi-line filter\" \"result_value > 5\r\n  AND result_unit = 'mmol/L'\" => $f527"   # new lines between clauses
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Handle-like text\" \"code IN ('$c1', '$a321')\" => $f528"   # text that looks like a handle; never replaced
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Parameters\" \"code = @code AND note = @note\" => $f529"
+  - "AddCohortParameter AggregateFilter:$f529 \"@code\" \"DECLARE @code AS varchar(50)\" \"'  padded  '\" null"   # spaces at both ends inside the value
+  - "AddCohortParameter AggregateFilter:$f529 \"@note\" \"DECLARE @note AS varchar(max)\" \"'first line\nsecond line'\" \"A value over two lines\""   # multi-line value
+  - "Set AggregateConfiguration:$a321 HavingSQL \"count(*) >= 2 -- at least two results\nAND max(result_value) > 5\""   # a -- comment line in HAVING
+  - "CreateNewFilter AggregateFilterContainer:$fc421 \"Both quotes\" \"label = 'He said \"\"it''s fine\"\"'\" => $f530"   # ' and \" together: rebuild only, cannot be typed
+  - "Set AggregateConfiguration:$a321 Order 0"
