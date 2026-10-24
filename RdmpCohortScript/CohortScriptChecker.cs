@@ -1,6 +1,7 @@
 // Checks a build script before anything is built, and collects every problem rather than stopping at the first.
 // Offline checks need no RDMP: commands, argument counts, handles and their roles, Set and Delete on handles only,
-// allowed properties, and every parameter a filter uses declared where RDMP gives it to the filter. Instance
+// allowed properties, every parameter declared where RDMP gives it and declared once, handles not used after their
+// Delete line, joins RDMP allows, and markers only for tables the set joins. Instance
 // checks read the platform: every existing object a line names exists and still has the name the script gives, and
 // the new cohort's name is free. For a script written by a person or an agent rather than exported, the check also
 // warns when a line leaves out a catalogue's mandatory filters, because a new cohort normally needs them.
@@ -24,6 +25,16 @@ internal sealed class CohortScriptChecker
     private readonly List<CohortScriptProblem> _problems;
     private readonly Dictionary<string, HandleRole> _created = new(StringComparer.Ordinal);
     private readonly HashSet<int> _linkedProjects = new();
+
+    // the file line of the Delete line that removes each handle's object
+    private readonly Dictionary<string, int> _deletedBy = new(StringComparer.Ordinal);
+
+    // the parameters each owner declares with AddCohortParameter lines, to refuse a second declaration
+    private readonly HashSet<(string Owner, string Name)> _declaredByLine = new();
+
+    // for forced joins: the tables of each set's columns, and each forced join with its line
+    private readonly Dictionary<string, HashSet<int>> _columnTablesOf = new(StringComparer.Ordinal);
+    private readonly List<(int FileLine, string Set, TableInfo Table)> _forcedJoins = new();
 
     // the sets that have a top filter container: from a filter container line, or from the mandatory filters a set
     // line copies
@@ -80,6 +91,8 @@ internal sealed class CohortScriptChecker
             CheckLine(line, line == parsed[0]);
 
         CheckParametersDeclared();
+        CheckMarkersJoined();
+        CheckForcedJoins();
 
         if (!string.IsNullOrWhiteSpace(newCohortName) && _locator.CatalogueRepository
                 .GetAllObjectsWhere<CohortIdentificationConfiguration>("Name", newCohortName).Any())
@@ -124,7 +137,11 @@ internal sealed class CohortScriptChecker
 
         CheckOutputs(line, definition);
         CheckTopFilterContainer(line);
+        CheckJoinUse(line);
         RecordForParameters(line);
+
+        if (l.Command == "Delete" && HandleIn(l.Arguments[0]) is { } deleted)
+            _deletedBy.TryAdd(deleted, line.FileLine);
 
         // the column to order by is kept for the set's graph; the cohort query has no ORDER BY
         if (l.Command == "SetTopX")
@@ -227,6 +244,9 @@ internal sealed class CohortScriptChecker
                 _sqlUses.Add((line.FileLine, target, ownerSet, $"The {l.Arguments[1].Text} of {target}", l.Arguments[2].Text));
                 break;
             case "AddCohortParameter" when !l.Arguments[1].IsNull:
+                if (!_declaredByLine.Add((target, l.Arguments[1].Text.ToLowerInvariant())))
+                    Problem(line.FileLine, CohortScriptRefusal.ParameterDeclaredTwice,
+                        $"An earlier line already declares {l.Arguments[1].Text} on {target}. Declare each parameter once on its owner.");
                 _declared.Add((target, l.Arguments[1].Text.ToLowerInvariant()));
                 if (CohortScriptFormat.RoleOf(target) == HandleRole.Cohort)
                     _cohortParameters.Add(l.Arguments[1].Text);
@@ -264,6 +284,82 @@ internal sealed class CohortScriptChecker
                     Problem(fileLine, CohortScriptRefusal.ParameterNotDeclared,
                         $"{what} uses {parameter}, but no line declares it. Add an AddCohortParameter line for {parameter} on the cohort, on the set or one of its filters, or on a patient index table the set joins.");
         }
+    }
+
+    // RDMP lets a set join one patient index table, and a patient index table join none, itself included
+    private void CheckJoinUse(ScriptFileLine line)
+    {
+        var l = line.Parsed;
+        if (l.Command != "UsePatientIndexTable" || HandleIn(l.Arguments[0]) is not { } set || HandleIn(l.Arguments[1]) is not { } joinable)
+            return;
+
+        if (_setOfJoinable.GetValueOrDefault(joinable) == set)
+            Problem(line.FileLine, CohortScriptRefusal.JoinsItself,
+                $"Set {set} is patient index table {joinable} itself, so it cannot join it.");
+        else if (_setOfJoinable.ContainsValue(set))
+            Problem(line.FileLine, CohortScriptRefusal.JoinFromAPatientIndexTable,
+                $"Set {set} is itself a patient index table, and RDMP does not let a patient index table join another one.");
+        else if (_joinedBy.TryGetValue(set, out var joined) && joined.Count > 0)
+            Problem(line.FileLine, CohortScriptRefusal.AlreadyJoinsATable,
+                $"Set {set} already joins patient index table {joined[0]}. RDMP allows one per set.");
+    }
+
+    // a {$j} marker becomes the alias of a joined table, so the set must join that table, or SQL Server cannot bind
+    // the name
+    private void CheckMarkersJoined()
+    {
+        foreach (var (fileLine, owner, ownerSet, what, sql) in _sqlUses)
+        {
+            var set = ownerSet ?? _setOf.GetValueOrDefault(owner);
+            if (set == null)
+                continue;
+
+            var joined = _joinedBy.GetValueOrDefault(set) ?? new List<string>();
+            foreach (var marker in CohortScriptFormat.SqlMarker.Matches(sql).Select(m => m.Groups["handle"].Value).Distinct())
+                if (_created.GetValueOrDefault(marker) == HandleRole.Joinable && !joined.Contains(marker))
+                    Problem(fileLine, CohortScriptRefusal.MarkerForTableNotJoined,
+                        $"{what} uses ix{{{marker}}}, but set {set} does not join patient index table {marker}. Add a UsePatientIndexTable line for it, or remove the marker.");
+        }
+    }
+
+    // RDMP joins the tables of a set's query through JoinInfo rows. A forced table that is not a table of the set's
+    // columns needs a join to another table of the query, or RDMP cannot build it. Lookups can also join tables, so
+    // only a table with no join at all is refused.
+    private void CheckForcedJoins()
+    {
+        if (_forcedJoins.Count == 0)
+            return;
+
+        var repository = _locator.CatalogueRepository;
+        var joins = repository.GetAllObjects<JoinInfo>();
+        foreach (var (fileLine, set, table) in _forcedJoins)
+        {
+            var columnTables = _columnTablesOf.GetValueOrDefault(set) ?? new HashSet<int>();
+            if (columnTables.Contains(table.ID))
+                continue;
+
+            var columns = table.ColumnInfos.Select(c => c.ID).ToHashSet();
+            if (columns.Count == 0)
+            {
+                Problem(fileLine, CohortScriptRefusal.ForcedJoinWithoutJoin,
+                    $"Table {table.ID} \"{table.Name}\" has no columns, so RDMP cannot join it to the set's other tables.");
+                continue;
+            }
+
+            var otherTables = columnTables.Concat(_forcedJoins.Where(f => f.Set == set && f.Table.ID != table.ID).Select(f => f.Table.ID)).ToHashSet();
+            var otherColumns = repository.GetAllObjectsInIDList<TableInfo>(otherTables).SelectMany(t => t.ColumnInfos).Select(c => c.ID).ToHashSet();
+            if (!joins.Any(j => (columns.Contains(j.ForeignKey_ID) && otherColumns.Contains(j.PrimaryKey_ID)) ||
+                                (columns.Contains(j.PrimaryKey_ID) && otherColumns.Contains(j.ForeignKey_ID))))
+                Problem(fileLine, CohortScriptRefusal.ForcedJoinWithoutJoin,
+                    $"Table {table.ID} \"{table.Name}\" has no join to the other tables of set {set}, so RDMP cannot build the set's query. Add the join in the catalogue (a JoinInfo), or remove the line.");
+        }
+    }
+
+    private HashSet<int> ColumnTables(string set)
+    {
+        if (!_columnTablesOf.TryGetValue(set, out var tables))
+            _columnTablesOf[set] = tables = new HashSet<int>();
+        return tables;
     }
 
     // every argument is checked by what its position holds, whatever its quoting
@@ -383,6 +479,9 @@ internal sealed class CohortScriptChecker
         if (existing is Project project)
             _linkedProjects.Add(project.ID);
 
+        if (existing is TableInfo table && line.Parsed.Command == "AddForcedJoin" && HandleIn(line.Parsed.Arguments[0]) is { } forcedSet)
+            _forcedJoins.Add((line.FileLine, forcedSet, table));
+
         if (existing is Catalogue catalogue)
             CheckCatalogueLine(line, catalogue);
     }
@@ -395,6 +494,8 @@ internal sealed class CohortScriptChecker
             out var refusal, out var columnProblem);
         if (identifier == null)
             Problem(line.FileLine, refusal, columnProblem);
+        else if (line.Parsed.Handles.Count > 0)
+            ColumnTables(line.Parsed.Handles[0]).Add(identifier.ColumnInfo.TableInfo_ID);
 
         if (line.Parsed.Command == "AddPatientIndexTable" && !line.Parsed.Arguments[4].IsNull)
         {
@@ -410,6 +511,8 @@ internal sealed class CohortScriptChecker
                          string.Equals(name, identifier?.GetRuntimeName(), StringComparison.OrdinalIgnoreCase))
                     Problem(line.FileLine, CohortScriptRefusal.DuplicateColumn,
                         $"Column \"{name}\" is listed twice, or is an identifier column. A patient index table has one identifier column and each other column once.");
+                else if (line.Parsed.Handles.Count > 0)
+                    ColumnTables(line.Parsed.Handles[0]).Add(column.ColumnInfo.TableInfo_ID);
             }
         }
 
@@ -510,6 +613,9 @@ internal sealed class CohortScriptChecker
         if (created != role)
             Problem(line.FileLine, CohortScriptRefusal.BadHandle,
                 $"Handle {handle} stands for a {Describe(created)}, but the line uses it as a {Describe(role)}.");
+        else if (_deletedBy.TryGetValue(handle, out var deletedOn))
+            Problem(line.FileLine, CohortScriptRefusal.HandleUsedAfterDelete,
+                $"Handle {handle} stands for a {Describe(created)} that the Delete line on line {deletedOn} removes. Use it before that line, or delete it later.");
     }
 
     private IMapsDirectlyToDatabaseTable Find(string typeName, int id) => typeName switch

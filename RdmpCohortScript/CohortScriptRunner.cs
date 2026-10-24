@@ -190,7 +190,14 @@ internal sealed class CohortScriptRunner
             return CohortScriptFormat.SqlMarker.Replace(argument.Text, m => IdOf(line, m.Groups["handle"].Value).ToString());
 
         if (kind == ArgumentKind.Handle && CohortScriptFormat.TrySplitTyped(argument.Text, out var typeName, out var rest))
-            return $"{typeName}:{IdOf(line, rest)}";
+        {
+            // otherwise no constructor would take the argument, and the message would not say why
+            var id = IdOf(line, rest);
+            if (!_repository.StillExists(ObjectTypes[typeName], id))
+                throw Stop(line, CohortScriptRefusal.HandleUsedAfterDelete,
+                    $"Handle {rest} stood for {typeName} {id}, which no longer exists, for example because an earlier line deleted it.");
+            return $"{typeName}:{id}";
+        }
 
         return argument.Text;
     }

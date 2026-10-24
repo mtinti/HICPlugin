@@ -292,6 +292,21 @@ public enum CohortScriptRefusal
     /// </summary>
     FolderHoldsAnotherExport,
 
+    /// <summary>Script: a line uses a handle whose object an earlier Delete line removes.</summary>
+    HandleUsedAfterDelete,
+
+    /// <summary>Script: SQL of a set uses the {$j} marker of a patient index table the set does not join.</summary>
+    MarkerForTableNotJoined,
+
+    /// <summary>
+    /// Script: a forced join to a table that has no columns, or no join (JoinInfo) to any other table of the set's
+    /// query, so RDMP cannot build the query.
+    /// </summary>
+    ForcedJoinWithoutJoin,
+
+    /// <summary>Script: two AddCohortParameter lines declare the same parameter on one owner.</summary>
+    ParameterDeclaredTwice,
+
     /// <summary>Rebuild: RDMP refused to run a line.</summary>
     LineRefused,
 

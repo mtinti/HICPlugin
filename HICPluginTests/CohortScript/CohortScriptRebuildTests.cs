@@ -386,8 +386,9 @@ internal class CohortScriptRebuildTests : UnitTests
         var script = Script(CreateLine, SetLine(), "Delete CohortAggregateContainer:$c3");
 
         RebuildWith(activator, script, $"GUI {Guid.NewGuid():N}");
+        // an operation RDMP does not have passes the check (a plain word) and fails at the rebuild, after the delete
         Assert.Throws<CohortScriptRebuildException>(() =>
-            RebuildWith(activator, Script(CreateLine, "Delete CohortAggregateContainer:$c3", "Delete CohortAggregateContainer:$c3"),
+            RebuildWith(activator, Script(CreateLine, "Delete CohortAggregateContainer:$c3", "Set CohortAggregateContainer:$c2 Operation FROBNICATE"),
                 $"GUI fails {Guid.NewGuid():N}"));
 
         Assert.Multiple(() =>
@@ -395,6 +396,21 @@ internal class CohortScriptRebuildTests : UnitTests
             Assert.That(activator.Prompts, Is.Empty, "The rebuild should not ask to confirm the deletes it makes.");
             Assert.That(activator.InteractiveDeletes, Is.True, "The delete setting should be restored, also after a failure.");
         });
+    }
+
+    // the check refuses this script, so the runner meets it only if the check misses a case; its message should
+    // then say that the object is gone, not that no constructor fits
+    [Test]
+    public void TheRunnerSaysWhenAHandlesObjectNoLongerExists()
+    {
+        var problems = new List<CohortScriptProblem>();
+        var lines = CohortScriptReader.Read(Script(CreateLine, "Delete CohortAggregateContainer:$c3", "Delete CohortAggregateContainer:$c3"), problems);
+        var runner = new CohortScriptRunner(new ConsoleInputManager(RepositoryLocator, ThrowImmediatelyCheckNotifier.Quiet) { DisallowInput = true },
+            $"Runner {Guid.NewGuid():N}");
+
+        var e = Assert.Throws<CohortScriptRebuildException>(() => runner.Run(lines));
+
+        Assert.That(e!.Message, Does.Contain("no longer exists"));
     }
 
     [Test]
@@ -546,7 +562,7 @@ internal class CohortScriptRebuildTests : UnitTests
         cic.EnsureNamingConvention(set);
         cic.RootCohortAggregateContainer.AddChild(set, 0);
         joinable.AddUser(set);
-        Repository.AggregateForcedJoinManager.CreateLinkBetween(set, WhenIHaveA<TableInfo>());
+        Repository.AggregateForcedJoinManager.CreateLinkBetween(set, ForcedJoinTable.JoinedTo(Repository, _identifier));
         new Rdmp.Core.Curation.Data.AggregateTopX(Repository, set, 10).SaveToDatabase();
         new AnyTableSqlParameter(Repository, set, "DECLARE @window AS int") { Value = "90" }.SaveToDatabase();
         var fc = new Rdmp.Core.Curation.Data.Aggregation.AggregateFilterContainer(Repository, FilterContainerOperation.AND);

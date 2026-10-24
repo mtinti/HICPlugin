@@ -13,14 +13,17 @@ Run a script with BuildCohortFromScript, and check it first with CheckCohortScri
   or x: $cic (the cohort), $c (a container), $a (a set), $j (a patient index table), $fc (a filter
   container) and $f (a filter). A column of a set is the set's handle, a dot and the column name, as
   in $a2.chi.
-- A line binds each handle once, and only a later line may use it. A line refers to a handle with its
-  type, bare, as in AggregateConfiguration:$a2.
+- A line binds each handle once, and only a later line may use it, up to a Delete line that removes its
+  object. A line refers to a handle with its type, bare, as in AggregateConfiguration:$a2.
 - A script changes only what it makes. It refers to an existing catalogue, table, project or published
   filter by type and id, followed by the object's name in quotes. The check refuses a name that differs
   from the object's current name.
 - Text and SQL are in double quotes and kept exactly. The bare word null means no value. Plain values
   (true, false, numbers, words such as INTERSECT) are bare. true and false are in lower case.
-- In SQL, ix{$j1} is the alias of patient index table $j1, as in ix{$j1}.admission_date.
+- In SQL, ix{$j1} is the alias of patient index table $j1, as in ix{$j1}.admission_date. The set whose
+  SQL it is joins $j1 with UsePatientIndexTable.
+- A forced join names one of the set's tables, or a table that a join (JoinInfo) in the catalogue links
+  to them, so RDMP can build the set's query.
 - Every parameter (@name) that a filter, or a set's HAVING, count column or column SQL, uses is declared
   with AddCohortParameter where RDMP gives it: on the cohort, on the set or any filter of that set, or on
   a patient index table the set joins (its set or any of its filters). A mandatory filter that a set
@@ -33,7 +36,8 @@ Run a script with BuildCohortFromScript, and check it first with CheckCohortScri
    Criteria and Exclusion Criteria (both UNION). The line binds the cohort and the three containers, in
    that order. A script reuses them, and deletes one it does not need with Delete.
 2. LinkCohortToProject comes before any set on a catalogue that is specific to that project.
-3. A patient index table comes before every set that joins it.
+3. A patient index table comes before every set that joins it. A set joins at most one patient index
+   table, and a patient index table joins none.
 4. RDMP adds each new child at the top of its container. After every child of a container exists, one
    Set ... Order line per child gives the order. The order matters for EXCEPT.
 5. IsDisabled lines come last, after the structure is built.

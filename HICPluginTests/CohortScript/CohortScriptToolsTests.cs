@@ -165,6 +165,87 @@ internal class CohortScriptToolsTests : UnitTests
         return lines.ToArray();
     }
 
+    // ---- rules the rebuild would meet, caught before anything is built
+
+    private string PatientIndexTableLine(string set, string joinable) =>
+        $"AddPatientIndexTable CohortIdentificationConfiguration:$cic1 Catalogue:{_catalogue.ID} \"{_catalogue.Name}\" \"{_column}\" null false => {set} {joinable} {set}.{_column}";
+
+    [Test]
+    public void AContainerUsedAfterItsDeleteLineIsRefused()
+    {
+        var problems = Check(Script(CreateLine, "Delete CohortAggregateContainer:$c3",
+            $"AddCatalogueToCohortSet CohortAggregateContainer:$c3 Catalogue:{_catalogue.ID} \"{_catalogue.Name}\" \"{_column}\" false => $a1 $a1.{_column}"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(problems.Select(p => p.Reason), Is.EqualTo(new[] { CohortScriptRefusal.HandleUsedAfterDelete }));
+            Assert.That(problems.Single().Message, Does.Contain("line 4"), "The message should name the Delete line.");
+        });
+    }
+
+    [Test]
+    public void ASetThatJoinsTwoPatientIndexTablesIsRefused()
+    {
+        var problems = Check(Script(CreateLine, PatientIndexTableLine("$a2", "$j1"), PatientIndexTableLine("$a3", "$j2"), SetLine(),
+            "UsePatientIndexTable AggregateConfiguration:$a1 JoinableCohortAggregateConfiguration:$j1 Inner",
+            "UsePatientIndexTable AggregateConfiguration:$a1 JoinableCohortAggregateConfiguration:$j2 Inner"));
+
+        Assert.That(problems.Select(p => p.Reason), Is.EqualTo(new[] { CohortScriptRefusal.AlreadyJoinsATable }));
+    }
+
+    [TestCase("$a2", CohortScriptRefusal.JoinsItself, TestName = "APatientIndexTableThatJoinsItselfIsRefused")]
+    [TestCase("$a3", CohortScriptRefusal.JoinFromAPatientIndexTable, TestName = "APatientIndexTableThatJoinsAnotherIsRefused")]
+    public void APatientIndexTableJoins(string set, CohortScriptRefusal expected)
+    {
+        var problems = Check(Script(CreateLine, PatientIndexTableLine("$a2", "$j1"), PatientIndexTableLine("$a3", "$j2"),
+            $"UsePatientIndexTable AggregateConfiguration:{set} JoinableCohortAggregateConfiguration:$j1 Inner"));
+
+        Assert.That(problems.Select(p => p.Reason), Is.EqualTo(new[] { expected }));
+    }
+
+    [Test]
+    public void AParameterDeclaredTwiceOnOneOwnerIsRefused()
+    {
+        var problems = Check(Script(CreateLine,
+            "AddCohortParameter CohortIdentificationConfiguration:$cic1 \"@code\" \"DECLARE @code AS int\" \"1\" null",
+            "AddCohortParameter CohortIdentificationConfiguration:$cic1 \"@CODE\" \"DECLARE @CODE AS int\" \"2\" null"));
+
+        Assert.That(problems.Select(p => p.Reason), Is.EqualTo(new[] { CohortScriptRefusal.ParameterDeclaredTwice }));
+    }
+
+    [TestCase("AddCohortFilter AggregateFilterContainer:$fc1 \"Joined\" \"x > ix{$j1}.y\" => $f1", false, TestName = "AFilterMarkerForATableTheSetDoesNotJoinIsRefused")]
+    [TestCase("SetText AggregateConfiguration:$a1 HavingSQL \"max(ix{$j1}.y) > 1\"", false, TestName = "AHavingMarkerForATableTheSetDoesNotJoinIsRefused")]
+    [TestCase("AddCohortFilter AggregateFilterContainer:$fc1 \"Joined\" \"x > ix{$j1}.y\" => $f1", true, TestName = "AMarkerForAJoinedTableIsAccepted")]
+    public void MarkersNeedAJoin(string line, bool joined)
+    {
+        var lines = new List<string> { CreateLine, PatientIndexTableLine("$a2", "$j1"), SetLine(), "AddNewFilterContainer AggregateConfiguration:$a1 => $fc1", line };
+        if (joined)
+            lines.Add("UsePatientIndexTable AggregateConfiguration:$a1 JoinableCohortAggregateConfiguration:$j1 Inner");
+
+        var reasons = Check(Script(lines.ToArray())).Select(p => p.Reason);
+
+        Assert.That(reasons, joined ? Is.Empty : Is.EqualTo(new[] { CohortScriptRefusal.MarkerForTableNotJoined }));
+    }
+
+    [TestCase("no columns", true, TestName = "AForcedJoinToATableWithNoColumnsIsRefused")]
+    [TestCase("no join", true, TestName = "AForcedJoinToATableWithNoJoinIsRefused")]
+    [TestCase("joined", false, TestName = "AForcedJoinToAJoinedTableIsAccepted")]
+    [TestCase("own table", false, TestName = "AForcedJoinToTheSetsOwnTableIsAccepted")]
+    public void ForcedJoins(string table, bool refused)
+    {
+        var forced = table switch
+        {
+            "no columns" => new TableInfo(Repository, $"Bare {Guid.NewGuid():N}"),
+            "joined" => ForcedJoinTable.JoinedTo(Repository, _identifier),
+            "own table" => (TableInfo)_identifier.ColumnInfo.TableInfo,
+            _ => (TableInfo)new ColumnInfo(Repository, "id", "int", new TableInfo(Repository, $"Unjoined {Guid.NewGuid():N}")).TableInfo
+        };
+
+        var reasons = Check(Script(CreateLine, SetLine(), $"AddForcedJoin AggregateConfiguration:$a1 TableInfo:{forced.ID} \"{forced.Name}\"")).Select(p => p.Reason);
+
+        Assert.That(reasons, refused ? Is.EqualTo(new[] { CohortScriptRefusal.ForcedJoinWithoutJoin }) : Is.Empty);
+    }
+
     // ---- mandatory filters in an authored script
 
     [Test]
@@ -842,7 +923,7 @@ internal class CohortScriptToolsTests : UnitTests
         _ = new AggregateDimension(Repository, _identifier, set);
         cic.EnsureNamingConvention(set);
         cic.RootCohortAggregateContainer.AddChild(set, 0);
-        Repository.AggregateForcedJoinManager.CreateLinkBetween(set, WhenIHaveA<TableInfo>());
+        Repository.AggregateForcedJoinManager.CreateLinkBetween(set, ForcedJoinTable.JoinedTo(Repository, _identifier));
 
         var published = new ExtractionFilter(Repository, $"Published {Guid.NewGuid():N}", _identifier) { WhereSQL = "x = 1" };
         published.SaveToDatabase();

@@ -106,8 +106,10 @@ internal class CohortScriptExampleTests : UnitTests
         var problems = new List<CohortScriptProblem>();
         var lines = CohortScriptReader.Read(text, problems).Parsed().ToArray();
 
-        // make an object for every id the example names, with the name and columns it gives, and point the id at it
+        // make an object for every id the example names, with the name and columns it gives, and point the id at it.
+        // A table that a set forces a join to gets a join to the set's identifier column, as RDMP needs.
         var newIds = new Dictionary<string, int>();
+        var catalogueOfSet = new Dictionary<string, Catalogue>();
         foreach (var line in lines)
         {
             var reference = CohortScriptFormat.Commands[line.Parsed.Command].Reference;
@@ -122,12 +124,14 @@ internal class CohortScriptExampleTests : UnitTests
                     : new Catalogue(Repository, name);
                 AddColumns(catalogue, lines, line);
                 newIds[key] = catalogue.ID;
+                if (line.Parsed.Handles.Count > 0)
+                    catalogueOfSet[line.Parsed.Handles[0]] = catalogue;
             }
             else if (!newIds.ContainsKey(key))
             {
                 newIds[key] = reference.TypeName switch
                 {
-                    "TableInfo" => new TableInfo(Repository, name).ID,
+                    "TableInfo" => JoinedTable(name, catalogueOfSet[line.Parsed.Arguments[0].Text.Split(':')[1]]).ID,
                     "Project" => new Rdmp.Core.DataExport.Data.Project(Repository, name).ID,
                     "ExtractionFilter" => new ExtractionFilter(Repository, name, AnyColumn()).ID,
                     _ => throw new InvalidOperationException(reference.TypeName)
@@ -249,6 +253,15 @@ internal class CohortScriptExampleTests : UnitTests
                     yield return $"identifier|{T(l.Arguments[3])}";
                     break;
             }
+    }
+
+    private TableInfo JoinedTable(string name, Catalogue catalogue)
+    {
+        var table = ForcedJoinTable.JoinedTo(Repository,
+            catalogue.GetAllExtractionInformation(ExtractionCategory.Any).First(e => e.IsExtractionIdentifier));
+        table.Name = name;
+        table.SaveToDatabase();
+        return table;
     }
 
     // the columns a line names on its catalogue: the identifier, the extra columns, and the columns of its handles

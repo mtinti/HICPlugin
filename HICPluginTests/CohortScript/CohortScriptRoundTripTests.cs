@@ -115,7 +115,7 @@ internal class CohortScriptRoundTripTests : UnitTests
         use.SaveToDatabase();
 
         // a forced join on set B (force a table into its query)
-        var forcedTable = WhenIHaveA<TableInfo>();
+        var forcedTable = ForcedJoinTable.JoinedTo(Repository, idB);
         forcedTable.Name = "[ForcedDb]..[ForcedTable]";
         forcedTable.SaveToDatabase();
         Repository.AggregateForcedJoinManager.CreateLinkBetween(aggB, forcedTable);

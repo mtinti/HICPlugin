@@ -153,8 +153,12 @@ The check and the rebuild refuse a script that breaks a rule of the format, for 
 a line makes it, an existing object named with a different name, or SQL that uses a parameter no line declares
 where RDMP gives it. That SQL is a filter's, or a set's HAVING, count column or column SQL. RDMP gives it the
 parameters of the cohort, of the set and any filter of that set (including the mandatory filters a set line
-copies), and of a patient index table the set joins. Each refusal has a reason code, `CohortScriptRefusal`,
-which tests and calling code use instead of the message.
+copies), and of a patient index table the set joins. The check also refuses, before anything is built, what
+the rebuild or RDMP would meet later: a handle used after the `Delete` line of its object, a parameter
+declared twice on one owner, a set that joins two patient index tables, a patient index table that joins one,
+a `{$j}` marker for a table the set does not join, and a forced join to a table with no join to the set's
+tables. Each refusal has a reason code, `CohortScriptRefusal`, which tests and calling code use instead of the
+message.
 
 The check also warns, without refusing, about every `SetTopX` line. RDMP 9.3.0 builds a cohort set's Top X
 without an ORDER BY, so the patients it keeps are not fixed, and a rebuild may return others. The column to

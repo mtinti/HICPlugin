@@ -22,6 +22,24 @@ using Rdmp.Core.ReusableLibraryCode.Checks;
 
 namespace HICPluginTests;
 
+/// <summary>Tables a set can force a join to.</summary>
+internal static class ForcedJoinTable
+{
+    /// <summary>
+    /// A table with one column and a join from it to the column's table, so RDMP can build a query that forces a
+    /// join to it. A bare test table has no columns and no join, and the check refuses a forced join to it.
+    /// </summary>
+    public static Rdmp.Core.Curation.Data.TableInfo JoinedTo(ICatalogueRepository repository,
+        Rdmp.Core.Curation.Data.ExtractionInformation column)
+    {
+        var table = new Rdmp.Core.Curation.Data.TableInfo(repository, $"Forced {Guid.NewGuid():N}");
+        var key = new Rdmp.Core.Curation.Data.ColumnInfo(repository, "id", "int", table);
+        _ = new Rdmp.Core.Curation.Data.JoinInfo(repository, key, (Rdmp.Core.Curation.Data.ColumnInfo)column.ColumnInfo,
+            Rdmp.Core.Curation.Data.ExtractionJoinType.Left, null);
+        return table;
+    }
+}
+
 /// <summary>Runs one command by name with text arguments, the way the rebuild and a typed line run it.</summary>
 internal static class CommandLine
 {
