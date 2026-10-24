@@ -7,8 +7,9 @@
 //
 // The folder is the one listed, whatever the cohort is called now, so a cohort renamed since an earlier export
 // still goes beside its requirement. The command checks the whole list and makes every file in memory before it
-// writes anything: an unknown cohort, a cohort listed twice, two cohorts listed for one folder, or a cohort the
-// format cannot carry stops the run with every problem listed and no file written.
+// writes anything: an unknown cohort, a cohort listed twice, two cohorts listed for one folder, a folder that holds
+// another cohort's export, or a cohort the format cannot carry stops the run with every problem listed and no file
+// written.
 //
 //   rdmp cmd ExportCohortsAsScripts .\cohorts-to-export.txt
 
@@ -52,7 +53,7 @@ public class ExecuteCommandExportCohortsAsScripts : BasicCommandExecution
         var replacing = exports.Where(e => CohortExportFiles.WouldReplace(e.Folder)).ToArray();
         if (BasicActivator.IsInteractive && replacing.Length > 0 &&
             !BasicActivator.YesNo(
-                $"{replacing.Length} of the {exports.Count} folders already hold an export. Replace their build scripts and catalogue manifests? Requirement files are kept.",
+                $"{replacing.Length} of the {exports.Count} folders already hold an export of the same cohort. Replace their build scripts and catalogue manifests? Requirement files are kept.",
                 "Replace exports"))
             return;
 
@@ -117,7 +118,14 @@ public class ExecuteCommandExportCohortsAsScripts : BasicCommandExecution
 
             try
             {
-                exports.Add((new CohortExportFiles(cic, BasicActivator.RepositoryLocator), folder));
+                var files = new CohortExportFiles(cic, BasicActivator.RepositoryLocator);
+                if (files.OtherExportIn(folder) is { } other)
+                {
+                    problems.Add(new CohortScriptProblem(n, CohortScriptRefusal.FolderHoldsAnotherExport, other));
+                    continue;
+                }
+
+                exports.Add((files, folder));
             }
             catch (CohortScriptExportException e)
             {

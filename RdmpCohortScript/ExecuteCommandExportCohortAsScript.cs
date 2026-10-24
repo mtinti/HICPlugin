@@ -3,7 +3,8 @@
 //
 // build.script.yaml is a format 1 build script (COHORT-SCRIPT-FORMAT.md) that ExecuteCommandBuildCohortFromScript
 // runs to build an identical cohort. catalogue-manifest.yaml lists the catalogues, tables and projects the script
-// refers to. requirement.md is a placeholder for a requirement written by hand, and is never replaced.
+// refers to. requirement.md is a placeholder for a requirement written by hand, and is never replaced. The export
+// refuses a folder that holds another cohort's export, so a requirement never ends up beside another script.
 
 using System;
 using System.IO;
@@ -54,6 +55,8 @@ public class ExecuteCommandExportCohortAsScript : BasicCommandExecution
 
         var files = new CohortExportFiles(_cic, BasicActivator.RepositoryLocator);
         var dir = new DirectoryInfo(Path.Join(outDir.FullName, Sanitise(_cic.Name)));
+        if (files.OtherExportIn(dir) is { } other)
+            throw new CohortScriptExportException(CohortScriptRefusal.FolderHoldsAnotherExport, other);
 
         // the command line replaces an earlier export without asking, so scripts can re-export
         if (BasicActivator.IsInteractive && CohortExportFiles.WouldReplace(dir) &&

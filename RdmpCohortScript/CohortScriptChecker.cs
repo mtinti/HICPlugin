@@ -40,7 +40,10 @@ internal sealed class CohortScriptChecker
     // the cohort's parameters declared so far, as written: RDMP does not copy a mandatory filter's parameter that the
     // cohort already declares
     private readonly List<string> _cohortParameters = new();
-    private readonly List<(int FileLine, string Filter, string Name, string Sql)> _filters = new();
+
+    // the SQL that may use parameters: each filter's, and the HAVING, count and column SQL of each set. Owner is the
+    // filter or set the SQL belongs to, Set the set (null for a filter, whose set is looked up at the end).
+    private readonly List<(int FileLine, string Owner, string Set, string What, string Sql)> _sqlUses = new();
 
     private readonly bool _acceptRenamed;
     private readonly bool _authored;
@@ -217,7 +220,11 @@ internal sealed class CohortScriptChecker
                 if (_setOf.TryGetValue(target, out var set))
                     _setOf[l.Handles[0]] = set;
                 if (!l.Arguments[2].IsNull)
-                    _filters.Add((line.FileLine, l.Handles[0], l.Arguments[1].Text, l.Arguments[2].Text));
+                    _sqlUses.Add((line.FileLine, l.Handles[0], null, $"Filter \"{l.Arguments[1].Text}\" ({l.Handles[0]})", l.Arguments[2].Text));
+                break;
+            case "SetText" when CohortScriptFormat.SqlProperties.Contains(l.Arguments[1].Text) && !l.Arguments[2].IsNull:
+                var ownerSet = CohortScriptFormat.RoleOf(target) == HandleRole.Dimension ? CohortScriptFormat.SplitDimension(target).SetHandle : target;
+                _sqlUses.Add((line.FileLine, target, ownerSet, $"The {l.Arguments[1].Text} of {target}", l.Arguments[2].Text));
                 break;
             case "AddCohortParameter" when !l.Arguments[1].IsNull:
                 _declared.Add((target, l.Arguments[1].Text.ToLowerInvariant()));
@@ -229,15 +236,17 @@ internal sealed class CohortScriptChecker
 
     // SQL Server compares parameter names without case, so the check does too. RDMP declares, in one query, the
     // parameters of the cohort, of the set, of every filter of the set, and of each patient index table the set
-    // joins (its set and its filters), so a filter sees all of them. A parameter of another set is declared only
-    // when the whole cohort runs, and a set run alone fails on it, so it does not count.
+    // joins (its set and its filters), so a filter, a HAVING, a count column and a column's SQL see all of them. A
+    // parameter of another set is declared only when the whole cohort runs, and a set run alone fails on it, so it
+    // does not count.
     private void CheckParametersDeclared()
     {
         var cohortHandles = _created.Where(kv => kv.Value == HandleRole.Cohort).Select(kv => kv.Key).ToArray();
-        foreach (var (fileLine, filter, name, sql) in _filters)
+        foreach (var (fileLine, owner, ownerSet, what, sql) in _sqlUses)
         {
-            var owners = new HashSet<string>(cohortHandles, StringComparer.Ordinal) { filter };
-            if (_setOf.TryGetValue(filter, out var set))
+            var owners = new HashSet<string>(cohortHandles, StringComparer.Ordinal) { owner };
+            var set = ownerSet ?? _setOf.GetValueOrDefault(owner);
+            if (set != null)
             {
                 var sets = new List<string> { set };
                 if (_joinedBy.TryGetValue(set, out var joinables))
@@ -253,7 +262,7 @@ internal sealed class CohortScriptChecker
             foreach (var parameter in SqlText.ParameterNames(sql).Distinct(StringComparer.OrdinalIgnoreCase))
                 if (!owners.Any(o => _declared.Contains((o, parameter.ToLowerInvariant()))))
                     Problem(fileLine, CohortScriptRefusal.ParameterNotDeclared,
-                        $"Filter \"{name}\" ({filter}) uses {parameter}, but no line declares it. Add an AddCohortParameter line for {parameter} on the cohort, on the filter's set or one of its filters, or on a patient index table the set joins.");
+                        $"{what} uses {parameter}, but no line declares it. Add an AddCohortParameter line for {parameter} on the cohort, on the set or one of its filters, or on a patient index table the set joins.");
         }
     }
 

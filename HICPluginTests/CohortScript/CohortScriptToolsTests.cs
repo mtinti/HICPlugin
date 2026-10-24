@@ -131,6 +131,24 @@ internal class CohortScriptToolsTests : UnitTests
             Assert.That(reasons, Has.Member(CohortScriptRefusal.ParameterNotDeclared));
     }
 
+    [TestCase("AggregateConfiguration:$a1 HavingSQL \"count(*) > @minimum\"", false, TestName = "AHavingThatUsesAnUndeclaredParameterIsRefused")]
+    [TestCase("AggregateConfiguration:$a1 CountSQL \"count(*) * @weight\"", false, TestName = "ACountColumnThatUsesAnUndeclaredParameterIsRefused")]
+    [TestCase("AggregateDimension:$a1.{0} SelectSQL \"LEFT({0}, @length)\"", false, TestName = "AColumnSqlThatUsesAnUndeclaredParameterIsRefused")]
+    [TestCase("AggregateConfiguration:$a1 HavingSQL \"count(*) > @minimum\"", true, TestName = "AHavingThatUsesTheSetsParameterIsAccepted")]
+    public void SetSqlParameters(string setText, bool declared)
+    {
+        var lines = new List<string> { CreateLine, SetLine(), $"SetText {string.Format(setText, _column)}" };
+        if (declared)
+            lines.Add("AddCohortParameter AggregateConfiguration:$a1 \"@minimum\" \"DECLARE @minimum AS int\" \"2\" null");
+
+        var reasons = Check(Script(lines.ToArray())).Select(p => p.Reason);
+
+        if (declared)
+            Assert.That(reasons, Has.No.Member(CohortScriptRefusal.ParameterNotDeclared));
+        else
+            Assert.That(reasons, Has.Member(CohortScriptRefusal.ParameterNotDeclared));
+    }
+
     // a set with a filter in a child filter container, and a parameter on the given owner (none when null)
     private string[] FilterLines(string sql, string owner)
     {
@@ -521,11 +539,13 @@ internal class CohortScriptToolsTests : UnitTests
     }
 
     [Test]
-    public void TheManifestOfEveryCatalogueLeavesOutInternalDatasets()
+    public void TheManifestOfEveryCatalogueLeavesOutCataloguesAScriptCannotUse()
     {
-        var internalOne = WhenIHaveA<Catalogue>();
+        var internalOne = CatalogueWithIdentifier("Internal");
         internalOne.IsInternalDataset = true;
         internalOne.SaveToDatabase();
+        var api = CatalogueWithIdentifier("API_Lookup");
+        var noIdentifier = WhenIHaveA<Catalogue>();
         var manifest = new FileInfo(Path.Join(_folder.FullName, "manifest.yaml"));
 
         new ExecuteCommandExportCatalogueManifest(Quiet(), null, null, manifest).Execute();
@@ -535,6 +555,91 @@ internal class CohortScriptToolsTests : UnitTests
         {
             Assert.That(ids, Has.Member(_catalogue.ID.ToString()));
             Assert.That(ids, Has.No.Member(internalOne.ID.ToString()), "A cohort cannot use an internal dataset.");
+            Assert.That(ids, Has.No.Member(api.ID.ToString()), "A set cannot use a catalogue served by an API.");
+            Assert.That(ids, Has.No.Member(noIdentifier.ID.ToString()), "A set cannot use a catalogue with no identifier column.");
+        });
+    }
+
+    private Catalogue CatalogueWithIdentifier(string name)
+    {
+        var throwaway = WhenIHaveA(Repository, out _, out var column);
+        var catalogue = (Catalogue)throwaway.Catalogue;
+        catalogue.Name = name;
+        catalogue.SaveToDatabase();
+        column.IsExtractionIdentifier = true;
+        column.SaveToDatabase();
+        throwaway.DeleteInDatabase();
+        return catalogue;
+    }
+
+    // ---- whose export a folder holds
+
+    [Test]
+    public void TheExportRefusesAFolderThatHoldsAnotherCohortWithTheSameName()
+    {
+        var first = PlainCohort();
+        var second = new CohortIdentificationConfiguration(Repository, first.Name);
+        second.CreateRootContainerIfNotExists();
+        new ExecuteCommandExportCohortAsScript(Quiet(), first, _folder).Execute();
+        var folder = Path.Join(_folder.FullName, first.Name);
+        File.WriteAllText(Path.Join(folder, CohortExportFiles.RequirementFile), "written by hand for the first");
+
+        var e = Assert.Throws<CohortScriptExportException>(() => new ExecuteCommandExportCohortAsScript(Quiet(), second, _folder).Execute());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e!.Reason, Is.EqualTo(CohortScriptRefusal.FolderHoldsAnotherExport));
+            Assert.That(e.Message, Does.Contain($"cohort {first.ID}").And.Contain($"cohort {second.ID}"), "The message should name both cohorts.");
+            Assert.That(File.ReadAllText(Path.Join(folder, CohortExportFiles.ScriptFile)), Does.Contain($"cohort-id: \"{first.ID}\""),
+                "The first cohort's script should stay beside its requirement.");
+        });
+    }
+
+    [Test]
+    public void TheExportReplacesAnEarlierExportOfTheSameCohort()
+    {
+        var cic = PlainCohort();
+        new ExecuteCommandExportCohortAsScript(Quiet(), cic, _folder).Execute();
+        cic.Description = "Changed since the first export";
+        cic.SaveToDatabase();
+
+        new ExecuteCommandExportCohortAsScript(Quiet(), cic, _folder).Execute();
+
+        Assert.That(File.ReadAllText(Path.Join(_folder.FullName, cic.Name, CohortExportFiles.ScriptFile)), Does.Contain("Changed since the first export"));
+    }
+
+    [Test]
+    public void TheExportRefusesAFolderWhoseScriptDoesNotSayWhichCohortItCameFrom()
+    {
+        var cic = PlainCohort();
+        var folder = Directory.CreateDirectory(Path.Join(_folder.FullName, cic.Name));
+        var authored = Script(CreateLine);
+        File.WriteAllText(Path.Join(folder.FullName, CohortExportFiles.ScriptFile), authored);
+
+        var e = Assert.Throws<CohortScriptExportException>(() => new ExecuteCommandExportCohortAsScript(Quiet(), cic, _folder).Execute());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e!.Reason, Is.EqualTo(CohortScriptRefusal.FolderHoldsAnotherExport));
+            Assert.That(File.ReadAllText(Path.Join(folder.FullName, CohortExportFiles.ScriptFile)), Is.EqualTo(authored));
+        });
+    }
+
+    [Test]
+    public void TheBulkExportRefusesAListedFolderThatHoldsAnotherCohortsExport()
+    {
+        var first = PlainCohort();
+        var second = PlainCohort();
+        Export($"{first.ID} shared\n");
+        var script = ScriptIn("shared");
+
+        var e = Assert.Throws<CohortScriptProblemsException>(() => Export($"{second.ID} shared\n"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(e!.Problems.Select(p => (p.FileLine, p.Reason)),
+                Is.EqualTo(new[] { (1, CohortScriptRefusal.FolderHoldsAnotherExport) }));
+            Assert.That(ScriptIn("shared"), Is.EqualTo(script), "The first cohort's export should be kept.");
         });
     }
 

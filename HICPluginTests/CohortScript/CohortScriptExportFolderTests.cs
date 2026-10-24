@@ -75,7 +75,9 @@ internal class CohortScriptExportFolderTests : UnitTests
             var exported = Directory.CreateDirectory(Path.Join(folder.FullName, cic.Name)).FullName;
             var script = Path.Join(exported, "build.script.yaml");
             var requirement = Path.Join(exported, "requirement.md");
-            File.WriteAllText(script, "earlier export");
+            // an earlier export of this cohort, marked so the test can tell it from a new one
+            var earlier = new BuildScriptWriter(cic, RepositoryLocator).Document() + "# earlier export\n";
+            File.WriteAllText(script, earlier);
             File.WriteAllText(requirement, "written by hand");
 
             var declines = new AnsweringActivator(RepositoryLocator) { FolderToChoose = folder, ReplaceAnswer = false };
@@ -83,7 +85,7 @@ internal class CohortScriptExportFolderTests : UnitTests
             Assert.Multiple(() =>
             {
                 Assert.That(declines.ReplaceQuestions, Is.EqualTo(1), "The export should ask before replacing.");
-                Assert.That(File.ReadAllText(script), Is.EqualTo("earlier export"),
+                Assert.That(File.ReadAllText(script), Is.EqualTo(earlier),
                     "The earlier build script should stay when the user says no.");
             });
 
@@ -91,7 +93,7 @@ internal class CohortScriptExportFolderTests : UnitTests
             new ExecuteCommandExportCohortAsScript(agrees, cic).Execute();
             Assert.Multiple(() =>
             {
-                Assert.That(File.ReadAllText(script), Does.Contain("Commands:"),
+                Assert.That(File.ReadAllText(script), Does.Contain("Commands:").And.Not.Contain("# earlier export"),
                     "The build script should be replaced when the user says yes.");
                 Assert.That(File.ReadAllText(requirement), Is.EqualTo("written by hand"),
                     "The requirement written by hand should never be replaced.");

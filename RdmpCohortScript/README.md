@@ -62,8 +62,10 @@ runs as `rdmp cmd <Command> ...`.
 
        rdmp cmd ExportCohortAsScript CohortIdentificationConfiguration:42 .\out
 
-   The files go into `.\out\<cohort name>\`. The export replaces an earlier build script and manifest, and keeps
-   a requirement written by hand. In the desktop client it asks before it replaces anything.
+   The files go into `.\out\<cohort name>\`. The export replaces an earlier export of the same cohort, and keeps
+   a requirement written by hand. In the desktop client it asks before it replaces anything. It refuses a folder
+   that holds another cohort's export, or a build script that does not say which cohort it came from: two
+   cohorts can have one name, and the requirement must stay beside its own cohort's script.
 
 2. Export many cohorts. Write a list file with one cohort per line, the id and then the folder. A relative folder
    is read from the list file's folder, and a line that starts with # is a comment:
@@ -75,8 +77,8 @@ runs as `rdmp cmd <Command> ...`.
        rdmp cmd ExportCohortsAsScripts .\cohorts.txt
 
    Each cohort goes to its listed folder, also after it was renamed. The command writes nothing if the list names
-   an unknown cohort, a cohort twice, two cohorts for one folder (also through a link to it), or a cohort the
-   format cannot carry.
+   an unknown cohort, a cohort twice, two cohorts for one folder (also through a link to it), a folder that holds
+   another cohort's export, or a cohort the format cannot carry.
 
 3. Check a script. Give `true` as the second argument for an authored script, and `true` as the third to accept
    existing objects renamed since the export, as the rebuild can:
@@ -99,6 +101,9 @@ runs as `rdmp cmd <Command> ...`.
 
        rdmp cmd ExportCatalogueManifest null null .\out\all-catalogues.yaml
        rdmp cmd ExportCatalogueManifest null Catalogue:717,718 .\out\two-catalogues.yaml
+
+   The list of every catalogue leaves out those a build script cannot use: internal datasets, catalogues served
+   by an API, and catalogues with no identifier column.
 
 ## How a rebuild runs
 
@@ -145,10 +150,11 @@ The export refuses, with a message and no files, a cohort that uses something th
 - a set whose name still starts with `cic_` after RDMP's prefix is removed
 
 The check and the rebuild refuse a script that breaks a rule of the format, for example a handle used before
-a line makes it, an existing object named with a different name, or a filter that uses a parameter no line
-declares where RDMP gives it to the filter (the cohort, the filter's set or any filter of that set, including
-the mandatory filters a set line copies, or a patient index table the set joins). Each refusal has a reason
-code, `CohortScriptRefusal`, which tests and calling code use instead of the message.
+a line makes it, an existing object named with a different name, or SQL that uses a parameter no line declares
+where RDMP gives it. That SQL is a filter's, or a set's HAVING, count column or column SQL. RDMP gives it the
+parameters of the cohort, of the set and any filter of that set (including the mandatory filters a set line
+copies), and of a patient index table the set joins. Each refusal has a reason code, `CohortScriptRefusal`,
+which tests and calling code use instead of the message.
 
 The check also warns, without refusing, about every `SetTopX` line. RDMP 9.3.0 builds a cohort set's Top X
 without an ORDER BY, so the patients it keeps are not fixed, and a rebuild may return others. The column to

@@ -65,11 +65,12 @@ public class ExecuteCommandExportCatalogueManifest : BasicCommandExecution
         }
         else
         {
-            // a cohort cannot use an internal dataset, so the list of every catalogue leaves those out
+            // the list of every catalogue leaves out those a build script cannot use: internal datasets, catalogues
+            // served by an API, and catalogues with no identifier column
             var catalogues = _catalogues is { Length: > 0 }
                 ? _catalogues
                 : BasicActivator.RepositoryLocator.CatalogueRepository.GetAllObjects<Catalogue>()
-                    .Where(c => !c.IsInternalDataset).ToArray();
+                    .Where(c => !c.IsInternalDataset && !c.IsApiCall() && IdentifierColumn.IdentifiersOf(c).Length > 0).ToArray();
             manifest = writer.ForCatalogues(catalogues);
             what = _catalogues is { Length: > 0 }
                 ? $"{catalogues.Length} catalogue(s)"

@@ -286,6 +286,12 @@ public enum CohortScriptRefusal
     /// <summary>Bulk export: the list of cohorts and folders cannot be used.</summary>
     BadExportList,
 
+    /// <summary>
+    /// Export: the folder holds the build script of another cohort, or one that does not say which cohort it came
+    /// from. Writing would leave that cohort's requirement beside this cohort's script.
+    /// </summary>
+    FolderHoldsAnotherExport,
+
     /// <summary>Rebuild: RDMP refused to run a line.</summary>
     LineRefused,
 

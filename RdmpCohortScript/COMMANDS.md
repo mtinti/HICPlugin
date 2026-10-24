@@ -21,11 +21,11 @@ Run a script with BuildCohortFromScript, and check it first with CheckCohortScri
 - Text and SQL are in double quotes and kept exactly. The bare word null means no value. Plain values
   (true, false, numbers, words such as INTERSECT) are bare. true and false are in lower case.
 - In SQL, ix{$j1} is the alias of patient index table $j1, as in ix{$j1}.admission_date.
-- Every parameter a filter uses (@name) is declared with AddCohortParameter where RDMP gives it to the
-  filter: on the cohort, on the filter's set or any filter of that set, or on a patient index table the
-  set joins (its set or any of its filters). A mandatory filter that a set line copies brings its
-  parameters, which count like those of the set's other filters. A parameter of another set does not
-  count, because a set run alone would fail on it.
+- Every parameter (@name) that a filter, or a set's HAVING, count column or column SQL, uses is declared
+  with AddCohortParameter where RDMP gives it: on the cohort, on the set or any filter of that set, or on
+  a patient index table the set joins (its set or any of its filters). A mandatory filter that a set
+  line copies brings its parameters, which count like those of the set's other filters. A parameter of
+  another set does not count, because a set run alone would fail on it.
 
 ## Order of lines
 

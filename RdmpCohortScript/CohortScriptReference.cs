@@ -74,11 +74,11 @@ internal static class CohortScriptReference
         sb.AppendLine("- Text and SQL are in double quotes and kept exactly. The bare word null means no value. Plain values");
         sb.AppendLine("  (true, false, numbers, words such as INTERSECT) are bare. true and false are in lower case.");
         sb.AppendLine("- In SQL, ix{$j1} is the alias of patient index table $j1, as in ix{$j1}.admission_date.");
-        sb.AppendLine("- Every parameter a filter uses (@name) is declared with AddCohortParameter where RDMP gives it to the");
-        sb.AppendLine("  filter: on the cohort, on the filter's set or any filter of that set, or on a patient index table the");
-        sb.AppendLine("  set joins (its set or any of its filters). A mandatory filter that a set line copies brings its");
-        sb.AppendLine("  parameters, which count like those of the set's other filters. A parameter of another set does not");
-        sb.AppendLine("  count, because a set run alone would fail on it.");
+        sb.AppendLine("- Every parameter (@name) that a filter, or a set's HAVING, count column or column SQL, uses is declared");
+        sb.AppendLine("  with AddCohortParameter where RDMP gives it: on the cohort, on the set or any filter of that set, or on");
+        sb.AppendLine("  a patient index table the set joins (its set or any of its filters). A mandatory filter that a set");
+        sb.AppendLine("  line copies brings its parameters, which count like those of the set's other filters. A parameter of");
+        sb.AppendLine("  another set does not count, because a set run alone would fail on it.");
         sb.AppendLine();
 
         sb.AppendLine("## Order of lines");
